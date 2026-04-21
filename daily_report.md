@@ -1,1 +1,1 @@
-❌ 程式執行發生錯誤：404 models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.
+❌ 發生錯誤，請檢查模型設定：404 models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.
