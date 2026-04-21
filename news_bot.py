@@ -8,8 +8,7 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 def fetch_and_summarize():
-    # 改用關鍵字搜尋 (Everything)，這樣抓到資料的機率最高
-    # 你可以把 q=AI 改成你感興趣的字，例如 q=Apple 或 q=Nvidia
+    # 1. 抓取新聞
     url = f"https://newsapi.org/v2/everything?q=AI&language=zh&sortBy=publishedAt&pageSize=5&apiKey={NEWS_API_KEY}"
     
     try:
@@ -22,30 +21,35 @@ def fetch_and_summarize():
         if not articles:
             report_text = "⚠️ 今日 News API 沒有回傳任何相關新聞。"
         else:
-            # 整理新聞內容
             news_content = ""
             for i, a in enumerate(articles):
                 news_content += f"\n新聞 {i+1}：{a.get('title','')}\n摘要：{a.get('description','')}\n"
             
-            # 呼叫 Gemini
+            # 2. 設定 Gemini
             genai.configure(api_key=GEMINI_API_KEY)
+            
+            # 🚀 這裡換成最穩定的模型名稱
+            # 如果 1.5-flash 還是不行，可以改成 'gemini-1.5-pro'
             model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = f"請將以下新聞整理成繁體中文摘要：\n{news_content}"
+            
+            prompt = f"請將以下新聞整理成繁體中文摘要，並列出三個今日最值得關注的科技趨勢：\n{news_content}"
+            
             ai_response = model.generate_content(prompt)
             report_text = ai_response.text
 
-        # 🚀 重點：無論如何都一定要寫出檔案！
+        # 3. 寫入檔案
         with open("daily_report.md", "w", encoding="utf-8") as f:
             f.write("# 🤖 AI 每日新聞洞察\n\n")
             f.write(report_text)
+            f.write(f"\n\n--- \n*最後更新時間：{os.popen('date').read()}*")
             
-        print("✅ 檔案已成功寫入 daily_report.md")
+        print("✅ 報告生成成功！")
 
     except Exception as e:
-        # 如果真的大爆炸，也要寫出錯誤報告，不要讓下一個步驟找不到檔案
+        # 如果模型報錯，這裡會寫入具體的錯誤訊息
         with open("daily_report.md", "w", encoding="utf-8") as f:
-            f.write(f"❌ 程式執行發生錯誤：{e}")
-        print(f"❌ 發生錯誤：{e}")
+            f.write(f"❌ 發生錯誤，請檢查模型設定：{e}")
+        print(f"❌ 錯誤：{e}")
 
 if __name__ == "__main__":
     fetch_and_summarize()
