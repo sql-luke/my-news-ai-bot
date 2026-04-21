@@ -59,7 +59,7 @@ def fetch_and_summarize():
             print(f"🔄 偵測到可用模型，正在使用: {chosen_model}")
             
             # 4. 專業級 AI 提示詞 (Prompt)
-            model = genai.GenerativeModel(chosen_model)
+            model = genai.GenerativeModel('gemini-1.5-flash')
             prompt = f"""
             你是一位資深的科技趨勢分析師。請針對以下新聞內容，製作一份精煉且具深度的《AI 科技每日情報》。
             
