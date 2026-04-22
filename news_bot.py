@@ -9,8 +9,33 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LINE_ACCESS_TOKEN = os.getenv("LINE_ACCESS_TOKEN")
 LINE_USER_ID = os.getenv("LINE_USER_ID")
 
+def get_kaohsiung_weather():
+    """獲取高雄今明兩日氣象預報 (使用 Open-Meteo 免費 API)"""
+    # 高雄經緯度：22.6163, 120.3133
+    url = "https://api.open-meteo.com/v1/forecast?latitude=22.6163&longitude=120.3133&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=Asia%2FTaipei"
+    try:
+        res = requests.get(url).json()
+        daily = res['daily']
+        # WMO Weather interpretation codes
+        weather_map = {
+            0: "☀️ 晴朗", 1: "🌤️ 晴時多雲", 2: "⛅ 多雲", 3: "☁️ 陰天", 
+            45: "🌫️ 有霧", 48: "🌫️ 霧淞", 51: "🌧️ 輕微毛毛雨", 
+            61: "🌧️ 陣雨", 95: "⚡ 雷雨"
+        }
+        
+        today_code = daily['weathercode'][0]
+        tomorrow_code = daily['weathercode'][1]
+        
+        weather_msg = f"🌡️ 【高雄氣象快報】\n"
+        weather_msg += f"• 今日：{weather_map.get(today_code, '天氣穩定')} ({daily['temperature_2m_min'][0]}°C ~ {daily['temperature_2m_max'][0]}°C)\n"
+        weather_msg += f"• 明日：{weather_map.get(tomorrow_code, '天氣穩定')} ({daily['temperature_2m_min'][1]}°C ~ {daily['temperature_2m_max'][1]}°C)"
+        return weather_msg
+    except Exception as e:
+        print(f"獲取天氣失敗: {e}")
+        return "🌡️ 【高雄氣象快報】暫時無法取得預報資料"
+
 def send_line_flex_message(text_content, model_name):
-    """發送深色模式 (Dark Mode) 的 LINE Flex Message"""
+    """發送深色模式的 LINE Flex Message"""
     if not LINE_ACCESS_TOKEN or not LINE_USER_ID:
         print("⚠️ 缺少 LINE 金鑰，跳過 LINE 推播")
         return
@@ -21,13 +46,12 @@ def send_line_flex_message(text_content, model_name):
         'Authorization': f'Bearer {LINE_ACCESS_TOKEN}'
     }
     
-    # 🖤 深色模式 Flex Message 排版
     payload = {
         "to": LINE_USER_ID,
         "messages": [
             {
                 "type": "flex",
-                "altText": "🌍 全球科技趨勢情報已送達！",
+                "altText": "🌍 全球情報與氣象已更新！",
                 "contents": {
                     "type": "bubble",
                     "size": "mega",
@@ -40,7 +64,7 @@ def send_line_flex_message(text_content, model_name):
                         "contents": [
                             {
                                 "type": "text",
-                                "text": "🌍 全球科技趨勢情報",
+                                "text": "🌍 全球與國內科技情報",
                                 "weight": "bold",
                                 "color": "#00FF41",
                                 "size": "xl"
@@ -78,130 +102,96 @@ def send_line_flex_message(text_content, model_name):
     
     response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
-        print("✅ LINE 深色 Flex 訊息推送成功！")
+        print("✅ LINE 綜合情報推送成功！")
     else:
         print(f"❌ LINE 推送失敗：{response.status_code}, {response.text}")
 
 def fetch_and_summarize():
-    # 2. 擴大搜索範圍：包含 AI, 科技, 半導體, 創新, 數位轉型
-    # 增加 pageSize 到 15，提供更多原始素材給 AI 篩選分析
-    search_query = "(AI OR 科技 OR 半導體 OR 數位轉型 OR 創新)"
-    url = f"https://newsapi.org/v2/everything?q={search_query}&language=zh&sortBy=publishedAt&pageSize=15&apiKey={NEWS_API_KEY}"
+    # 2. 準備素材庫
+    all_news_raw = ""
+    
+    # 類別 1: 國內新聞 (Taiwan Top Headlines)
+    try:
+        tw_url = f"https://newsapi.org/v2/top-headlines?country=tw&pageSize=5&apiKey={NEWS_API_KEY}"
+        tw_res = requests.get(tw_url).json()
+        for a in tw_res.get("articles", []):
+            all_news_raw += f"[國內] {a['title']}\n摘要：{a.get('description', '')}\n"
+    except: pass
+
+    # 類別 2: 國際新聞 (Global Top Headlines)
+    try:
+        gl_url = f"https://newsapi.org/v2/top-headlines?language=en&pageSize=5&apiKey={NEWS_API_KEY}"
+        gl_res = requests.get(gl_url).json()
+        for a in gl_res.get("articles", []):
+            all_news_raw += f"[國際] {a['title']}\n摘要：{a.get('description', '')}\n"
+    except: pass
+
+    # 類別 3: AI 科技趨勢
+    try:
+        ai_url = f"https://newsapi.org/v2/everything?q=AI&pageSize=5&apiKey={NEWS_API_KEY}"
+        ai_res = requests.get(ai_url).json()
+        for a in ai_res.get("articles", []):
+            all_news_raw += f"[科技] {a['title']}\n摘要：{a.get('description', '')}\n"
+    except: pass
     
     try:
-        print("正在獲取全球科技資料...")
-        response = requests.get(url)
-        data = response.json()
-        articles = data.get("articles", [])
+        # 3. 設定 Gemini 
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        if not articles:
-            output_content = "⚠️ 今日未能獲取相關科技新聞，請檢查 API 額度。"
-            successful_model = "無"
-        else:
-            # 整理新聞內容：精簡化，不傳送來源媒體資訊給 AI，專注於標題與內容
-            news_raw_data = ""
-            for i, a in enumerate(articles):
-                title = a.get('title', '無標題')
-                desc = a.get('description', '無摘要內容')
-                news_raw_data += f"\n[資料 {i+1}] {title}\n摘要：{desc}\n"
-            
-            genai.configure(api_key=GEMINI_API_KEY)
-            print("正在偵測可用 AI 模型...")
-            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            
-            priority_list = [
-                'models/gemini-2.5-flash',
-                'models/gemini-1.5-flash', 
-                'models/gemini-1.5-pro'
-            ]
-            
-            final_attempt_list = [p for p in priority_list if p in available_models]
-            for m in available_models:
-                if m not in final_attempt_list:
-                    final_attempt_list.append(m)
-
-            ai_response_text = None
-            successful_model = None
-
-            for model_name in final_attempt_list:
-                try:
-                    print(f"嘗試使用模型：{model_name}...")
-                    model = genai.GenerativeModel(model_name)
-                    
-                    # 💡 針對擴大範圍與精簡來源設計的新 Prompt
-                    prompt = f"""
-                    你是一位「具備全球視野」的科技趨勢專欄作家。
-                    請閱讀以下來自全球的科技、AI 與半導體相關資訊，為我進行精煉的分析。
-                    
-                    【⚠️ 排版限制】
-                    1. 絕對不使用 Markdown 符號（如 `#`, `**`, `*`）。
-                    2. 絕對不附上連結。
-                    3. 全程使用「條列式」，每句盡量不超過 30 字。
-                    4. 使用全形括號【】標示重點。
-
-                    【報告結構】請直接複製以下標題：
-
-                    📰 【今日焦點】全球動態
-                    (挑選 4 則最重磅的全球科技新聞。格式如下，嚴禁標註新聞來源媒體)
-                    • 完整標題文字
-                    👉 重點解讀：(用一句話解釋這對全球科技界的影響)
-
-                    📝 【核心摘要】重點濃縮
-                    (用 2 到 3 條短句，總結今天全球科技環境的整體氣氛與關鍵變動)
-                    • 
-                    • 
-
-                    💡 【深度洞察】世界趨勢
-                    (從全球競爭、產業鏈轉移或社會變革的角度，提出 2 個獨特的發現)
-                    • 
-                    • 
-
-                    🚀 【未來預測】應用與行動
-                    (預測接下來的技術演變，並建議讀者在職場或生活中可以注意的機會)
-                    • 
-                    • 
-
-                    素材內容：
-                    {news_raw_data}
-                    
-                    請使用繁體中文，確保內容具備專業深度但文字白話易讀。
-                    """
-                    
-                    response = model.generate_content(prompt)
-                    ai_response_text = response.text
-                    successful_model = model_name
-                    print(f"✅ {model_name} 成功產出分析報告！")
-                    break 
-                except Exception as e:
-                    print(f"❌ {model_name} 失敗 (原因：{str(e)[:50]}...)")
-                    continue
-
-            if not ai_response_text:
-                raise Exception("所有可用模型皆無法執行。")
-
-            output_content = ai_response_text
-
-        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # 獲取高雄氣象文字
+        weather_text = get_kaohsiung_weather()
         
+        prompt = f"""
+        你是一位全能的資訊策展人。請閱讀以下新聞素材，為我產出今日情報。
+        
+        【⚠️ 排版與內容嚴格限制】
+        1. 絕對不使用 Markdown 符號（如 `#`, `**`, `*`）。
+        2. 絕對不附上連結。
+        3. 標題欄位嚴禁標註來源媒體（例如：不要寫 Yahoo、中時等）。
+        4. 全程使用「條列式」，每句盡量不超過 30 字，並善用全形括號【】。
+
+        【報告結構】請直接複製以下標題：
+
+        📰 【今日焦點】全球與國內
+        (請從素材中挑選 4 則最重要的新聞。直接列出完整標題。)
+        👉 重點解讀：(用白話解釋為什麼這件事重要)
+
+        📝 【重點摘要】快速瀏覽
+        (用 3 條短句總結今天整體的資訊氛圍)
+        • 
+        • 
+        • 
+
+        💡 【深度洞察】我的發現
+        (從全球局勢或產業變動的角度，提出 2 個獨特的觀察或發現)
+        • 
+        • 
+
+        以下是今日的新聞素材：
+        {all_news_raw}
+        
+        請使用繁體中文回答，語氣專業且俐落。
+        """
+        
+        response = model.generate_content(prompt)
+        ai_output = response.text
+        
+        # 結合氣象與新聞內容
+        final_display_content = f"{weather_text}\n\n{ai_output}"
+        
+        # 4. 傳送 LINE
+        send_line_flex_message(final_display_content, "gemini-1.5-flash")
+        
+        # 5. 更新本地 daily_report.md (不存 Google Drive)
         with open("daily_report.md", "w", encoding="utf-8") as f:
-            f.write("# 🤖 全球科技趨勢情報\n\n")
-            f.write(output_content)
-            f.write(f"\n\n--- \n**⚙️ 系統資訊**")
-            f.write(f"\n- 執行時間：{current_time} (UTC)")
-            f.write(f"\n- 最終選用模型：`{successful_model}`")
+            f.write(f"# 🌍 全球與國內科技情報 ({datetime.now().strftime('%Y-%m-%d')})\n\n")
+            f.write(final_display_content)
             
-        print("✅ 任務圓滿完成！準備推播至 LINE...")
-        send_line_flex_message(output_content, successful_model)
+        print("✅ 全能情報任務圓滿完成！")
 
     except Exception as e:
-        error_msg = f"❌ 執行過程中發生錯誤：{str(e)}"
-        print(error_msg)
-        if LINE_ACCESS_TOKEN and LINE_USER_ID:
-            url = 'https://api.line.me/v2/bot/message/push'
-            requests.post(url, headers={'Authorization': f'Bearer {LINE_ACCESS_TOKEN}'}, json={
-                'to': LINE_USER_ID,
-                'messages': [{'type': 'text', 'text': f"⚠️ 機器人報錯：\n{str(e)[:150]}"}]
-            })
+        print(f"❌ 執行出錯：{e}")
 
 if __name__ == "__main__":
     fetch_and_summarize()
