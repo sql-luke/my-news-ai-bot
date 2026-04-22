@@ -2,35 +2,36 @@ name: Daily News AI Summary
 
 on:
   schedule:
-    - cron: '0 22 * * *' # 每天 UTC 00:00 執行（約台灣時間早上 8 點）
-  workflow_dispatch: # 這行能讓你「手動」測試按鈕，不用等明天
+    # UTC 的 22:00 等於台灣時間的早上 06:00
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 這裡給予 GitHub 修改檔案的權限，否則沒辦法存入報告
     permissions:
       contents: write
-      
     steps:
-      - name: 1. 複製程式碼到執行環境
-        uses: actions/checkout@v4
-
-      - name: 2. 設定 Python 環境
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-
-      - name: 3. 安裝必要套件
-        run: pip install requests google-generativeai
-
-      - name: 4. 執行機器人程式
+          python-version: '3.11'  # 已更新為較新的 Python 版本
+          
+      - run: pip install requests google-generativeai
+      
+      - name: Run Bot
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+          LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         run: python news_bot.py
-
-      - name: 5. 把生成的報告存回 GitHub
+        
+      - name: Save Report
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
