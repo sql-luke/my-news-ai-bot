@@ -67,11 +67,11 @@ def fetch_and_summarize():
             print("正在偵測可用 AI 模型...")
             available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
             
-            # 設定嘗試順序：1.5-flash 最穩定且配額多，放在第一位
+            # 設定嘗試順序：把上次成功且最新的 2.5-flash 放第一位，加快執行速度
             priority_list = [
+                'models/gemini-2.5-flash',
                 'models/gemini-1.5-flash', 
                 'models/gemini-1.5-pro', 
-                'models/gemini-pro',
                 'models/gemini-2.0-flash' 
             ]
             
@@ -90,6 +90,7 @@ def fetch_and_summarize():
                     print(f"嘗試使用模型：{model_name}...")
                     model = genai.GenerativeModel(model_name)
                     
+                    # 這是修改後的 Prompt，特別強化了 Markdown 連結的輸出格式
                     prompt = f"""
                     你是一位資深的科技趨勢分析師。請針對以下新聞內容，製作一份精煉且具深度的《AI 科技每日情報》。
                     
@@ -98,7 +99,7 @@ def fetch_and_summarize():
                     2. 【重點新聞追蹤】：精選 3-4 則最具影響力的新聞。
                         - 格式：**[標題]** (來源：[媒體名稱])
                         - 內容簡述：重點說明該事件發生的核心原因與具體內容。
-                        - 連結：請務必保留原始新聞連結。
+                        - 連結：請使用 Markdown 語法將網址包裝成超連結，例如：[👉 點此閱讀原始新聞](此處填入網址)
                     3. 【深度洞察分析】：
                         - 總結 2-3 個今日最值得關注的趨勢。
                         - 分別從「產業結構影響」與「大眾生活改變」兩個面向深入解析。
@@ -107,7 +108,7 @@ def fetch_and_summarize():
                     新聞內容：
                     {news_raw_data}
                     
-                    請使用繁體中文回答，語氣要專業、精確且易於閱讀。
+                    請使用繁體中文回答，語氣要專業、精確且易於閱讀。確保不要輸出 Markdown 語法以外的特殊字元，以確保在 LINE 介面上顯示正常。
                     """
                     
                     response = model.generate_content(prompt)
