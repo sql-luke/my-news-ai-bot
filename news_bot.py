@@ -172,4 +172,35 @@ def fetch_and_summarize():
                     print(f"✅ {model_name} 成功產出報告！")
                     break 
                 except Exception as e:
-                    print(f"❌ {model_name} 失敗 (原因：{str
+                    print(f"❌ {model_name} 失敗 (原因：{str(e)[:50]}...)，嘗試下一個...")
+                    continue
+
+            if not ai_response_text:
+                raise Exception("所有可用模型皆無法執行。")
+
+            output_content = ai_response_text
+
+        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        with open("daily_report.md", "w", encoding="utf-8") as f:
+            f.write("# 🤖 AI 每日新聞洞察\n\n")
+            f.write(output_content)
+            f.write(f"\n\n--- \n**⚙️ 系統資訊**")
+            f.write(f"\n- 執行時間：{current_time} (UTC)")
+            f.write(f"\n- 最終選用模型：`{successful_model}`")
+            
+        print("✅ 任務圓滿完成！準備推播至 LINE...")
+        send_line_flex_message(output_content, successful_model)
+
+    except Exception as e:
+        error_msg = f"❌ 執行過程中發生錯誤：{str(e)}"
+        print(error_msg)
+        if LINE_ACCESS_TOKEN and LINE_USER_ID:
+            url = 'https://api.line.me/v2/bot/message/push'
+            requests.post(url, headers={'Authorization': f'Bearer {LINE_ACCESS_TOKEN}'}, json={
+                'to': LINE_USER_ID,
+                'messages': [{'type': 'text', 'text': f"⚠️ 機器人出錯：\n{str(e)[:150]}"}]
+            })
+
+if __name__ == "__main__":
+    fetch_and_summarize()
