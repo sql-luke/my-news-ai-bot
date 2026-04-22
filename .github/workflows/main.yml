@@ -2,12 +2,9 @@ name: Daily News AI Summary
 
 on:
   schedule:
-    # UTC 的 22:00 等於台灣時間的早上 06:00
+    # 台灣時間早上 06:00
     - cron: '0 22 * * *'
   workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -16,13 +13,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'  # 已更新為較新的 Python 版本
-          
+          python-version: '3.11'
       - run: pip install requests google-generativeai
-      
       - name: Run Bot
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -30,11 +24,10 @@ jobs:
           LINE_ACCESS_TOKEN: ${{ secrets.LINE_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         run: python news_bot.py
-        
       - name: Save Report
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add daily_report.md
-          git commit -m "Update daily report" || exit 0
+          git commit -m "Update news report" || exit 0
           git push
