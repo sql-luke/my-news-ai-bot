@@ -1,245 +1,260 @@
 import os
 import requests
+from datetime import datetime, timezone, timedelta
 import google.generativeai as genai
-from datetime import datetime, timedelta
+from gtts import gTTS
+from mutagen.mp3 import MP3
 
-# 1. API 金鑰與設定
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-LINE_ACCESS_TOKEN = os.getenv("LINE_ACCESS_TOKEN")
-LINE_USER_ID = os.getenv("LINE_USER_ID")
+# ==========================================
+# 系統設定與金鑰讀取
+# ==========================================
+NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_USER_ID = os.environ.get("LINE_USER_ID")
 
-def get_detailed_weather():
-    """獲取高雄詳細氣象數據，並預備日期標籤"""
-    url = "https://api.open-meteo.com/v1/forecast?latitude=22.6163&longitude=120.3133&hourly=temperature_2m,precipitation_probability&daily=weathercode&timezone=Asia%2FTaipei&forecast_days=2"
+# 設定 Gemini API
+genai.configure(api_key=GEMINI_API_KEY)
+
+# ==========================================
+# 核心功能與工具模組
+# ==========================================
+
+def get_kaohsiung_weather():
+    """
+    獲取高雄市區 (Cianjhen District) 的天氣預報。
+    """
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": 22.595,
+        "longitude": 120.320,
+        "daily": ["temperature_2m_max", "temperature_2m_min", "precipitation_probability_max"],
+        "timezone": "Asia/Taipei"
+    }
     try:
-        res = requests.get(url).json()
-        hourly = res['hourly']
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        daily = data.get("daily", {})
         
-        # 取得今天與明天的日期
-        today = datetime.now()
-        tomorrow = today + timedelta(days=1)
-        today_label = f"今({today.day})"
-        tomorrow_label = f"明({tomorrow.day})"
-        
-        # 今日關鍵時段
-        t_8 = hourly['temperature_2m'][8]
-        t_14 = hourly['temperature_2m'][14]
-        t_20 = hourly['temperature_2m'][20]
-        
-        # 降雨機率分析
-        today_rain_probs = hourly['precipitation_probability'][0:24]
-        max_rain_prob = max(today_rain_probs)
-        max_rain_hour = today_rain_probs.index(max_rain_prob)
-        
-        weather_raw = f"""
-        [高雄氣象數據參考]
-        今日標籤：{today_label}，氣溫：早上8點 {t_8}°C、下午2點 {t_14}°C、晚上8點 {t_20}°C。
-        今日降雨：最高機率 {max_rain_prob}%，預計最可能降雨在 {max_rain_hour}:00 左右。
-        明日標籤：{tomorrow_label}，請主播根據數據一併預報明日趨勢。
-        """
-        return weather_raw, today_label, tomorrow_label
+        weather_info = (
+            f"最高溫: {daily.get('temperature_2m_max', ['N/A'])[0]}°C, "
+            f"最低溫: {daily.get('temperature_2m_min', ['N/A'])[0]}°C, "
+            f"降雨機率: {daily.get('precipitation_probability_max', ['N/A'])[0]}%"
+        )
+        return weather_info
     except Exception as e:
-        print(f"氣象擷取錯誤: {e}")
-        return "[高雄氣象數據] 系統異常，請提醒注意天氣。", "今日", "明日"
+        print(f"Error fetching weather: {e}")
+        return "無法取得天氣資訊"
 
-def create_section(title, content):
-    """建立 Flex Message 區塊，優化標題明顯度與間距"""
-    blocks = [
-        {
-            "type": "text",
-            "text": title,
-            "weight": "bold",
-            "color": "#00FF41", 
-            "size": "lg",       
-            "margin": "xl"      
-        }
-    ]
-    
-    for line in content.split('\n'):
-        line = line.replace("**", "").strip()
-        if not line: continue
+def get_news(query, language="zh"):
+    """
+    使用 News API 獲取指定關鍵字的新聞。
+    """
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": query,
+        "language": language,
+        "sortBy": "publishedAt",
+        "apiKey": NEWS_API_KEY,
+        "pageSize": 5
+    }
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        articles = response.json().get("articles", [])
         
-        # 總結樣式
-        if line.startswith("總結："):
-            blocks.append({
-                "type": "text", "text": line, "weight": "bold", 
-                "color": "#FFD700", "size": "sm", "wrap": True, "margin": "md"
-            })
-        # 新聞標題樣式：放大、加粗、純白
-        elif line.startswith("【") and "】" in line:
-            blocks.append({
-                "type": "text", "text": line, "weight": "bold", 
-                "color": "#FFFFFF", "size": "md", "wrap": True, "margin": "lg"
-            })
-        # 一般內文樣式
-        else:
-            blocks.append({
-                "type": "text", "text": line, 
-                "color": "#E0E0E0", "size": "sm", "wrap": True, "margin": "sm"
-            })
-            
-    return blocks
+        news_list = []
+        for article in articles:
+            title = article.get("title")
+            description = article.get("description")
+            if title and description:
+                news_list.append(f"標題: {title}\n摘要: {description}")
+        return "\n\n".join(news_list)
+    except Exception as e:
+        print(f"Error fetching news for '{query}': {e}")
+        return "無法取得新聞"
 
-def send_line_flex_message(weather_text, intl_text, tw_text, ai_text, model_name):
-    """發送單一結構化 Flex Message 卡片"""
-    if not LINE_ACCESS_TOKEN or not LINE_USER_ID: return
+def generate_insights(weather_data, global_news, local_news, tech_news):
+    """
+    使用 Gemini 模型整理新聞並生成具備洞察力的播報稿。
+    """
+    prompt = f"""
+    你現在是一位專業、具備前瞻視野的 AI 新聞主播。
+    請根據以下資訊，整理出一份條理分明、具備深度洞察的晨間新聞播報稿。
+    請使用繁體中文，語氣需自信、客觀且具備啟發性。
 
-    url = 'https://api.line.me/v2/bot/message/push'
-    headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {LINE_ACCESS_TOKEN}'}
+    【今日高雄氣象】
+    {weather_data}
+    - 請依據氣象數據，提供貼心的穿搭與出門建議（例如是否攜帶雨具）。
+
+    【全球焦點】
+    {global_news}
+    - 挑選 1-2 則最具影響力的國際事件進行重點解說。
+
+    【國內時事】
+    {local_news}
+    - 挑選 1-2 則對台灣民生或經濟最具關聯的事件。
+
+    【科技 AI 前沿】
+    {tech_news}
+    - 挑選 1 則最重要的科技突破或 AI 發展趨勢。
+
+    【排版要求】
+    - 使用 Markdown 格式。
+    - 每個段落（包含總結）請使用 `#` 或 `**` 標示大標題或重點。
+    - 每則新聞後方，請加入一段「**總結：**」（包含冒號），提供精闢的短評或洞察。
+    """
     
-    body_contents = []
-    if weather_text: body_contents.extend(create_section("🌦️ 氣象主播特報", weather_text))
-    if intl_text: body_contents.extend(create_section("🌍 全球焦點新聞", intl_text))
-    if tw_text: body_contents.extend(create_section("🇹🇼 國內時事脈動", tw_text))
-    if ai_text: body_contents.extend(create_section("🤖 科技與 AI 前沿", ai_text))
+    # 嘗試使用不同的模型以確保穩定性 (V2.0 容錯機制)
+    models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    for model_name in models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            print(f"Successfully generated insights using {model_name}")
+            return response.text
+        except Exception as e:
+            print(f"Failed to generate with {model_name}: {e}")
+            continue
+    
+    return "抱歉，今日無法產生新聞洞察報告。"
+
+def generate_audio(full_news_text):
+    """
+    接收完整的新聞內容文字，生成 MP3 檔案並計算時長。
+    """
+    audio_path = "morning_news.mp3"
+    
+    # 為了讓語音聽起來更順暢，我們將文字中的 Markdown 符號（如 ** 或 #）簡單替換掉
+    clean_text = full_news_text.replace("**", "").replace("#", "").replace("---", "。")
+    
+    try:
+        # 生成語音 (繁體中文)
+        tts = gTTS(text=clean_text, lang='zh-TW', slow=False)
+        tts.save(audio_path)
+        
+        # 計算時長（LINE 語音訊息強制要求填寫毫秒數）
+        audio_info = MP3(audio_path)
+        duration_ms = int(audio_info.info.length * 1000)
+        
+        print(f"✅ 語音檔案已產出，長度為 {duration_ms} 毫秒")
+        return audio_path, duration_ms
+    except Exception as e:
+         print(f"Error generating audio: {e}")
+         return None, None
+
+def send_line_flex_message(insights_text):
+    """
+    將生成的洞察報告透過 LINE Messaging API 發送給使用者（包含深色模式 Flex Message）。
+    """
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+    }
+
+    # 將生成的文字稿依照換行符號分割，以便組裝 Flex Message
+    lines = insights_text.split('\n')
+    flex_contents = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # 簡單的解析邏輯：將標題字體放大並設定顏色，將「總結」設為金色
+        if line.startswith("#"):
+            flex_contents.append({
+                "type": "text",
+                "text": line.replace("#", "").strip(),
+                "weight": "bold",
+                "size": "xl",
+                "color": "#00FF00" # 駭客綠大標題
+            })
+        elif "總結：" in line:
+            flex_contents.append({
+                "type": "text",
+                "text": line,
+                "weight": "bold",
+                "color": "#FFD700", # 金色高亮
+                "wrap": True
+            })
+        else:
+            flex_contents.append({
+                "type": "text",
+                "text": line,
+                "color": "#F5F5DC", # 米白色內文
+                "wrap": True
+            })
 
     payload = {
         "to": LINE_USER_ID,
         "messages": [
             {
                 "type": "flex",
-                "altText": "🌍 您的全方位晨間情報已送達！",
+                "altText": "您的晨間 AI 科技與生活情報已送達！",
                 "contents": {
-                    "type": "bubble", "size": "mega",
-                    "header": {
-                        "type": "box", "layout": "vertical", "backgroundColor": "#000000",
-                        "contents": [
-                            {"type": "text", "text": "🌍 全方位晨間情報", "weight": "bold", "color": "#FFFFFF", "size": "xl"},
-                            {"type": "text", "text": f"分析引擎: {model_name}", "color": "#888888", "size": "xs", "margin": "sm"}
-                        ]
+                    "type": "bubble",
+                    "styles": {
+                        "body": {
+                            "backgroundColor": "#121212" # 極致黑色底
+                        }
                     },
                     "body": {
-                        "type": "box", "layout": "vertical", "backgroundColor": "#1A1A1A",
-                        "contents": body_contents
+                        "type": "box",
+                        "layout": "vertical",
+                        "contents": flex_contents
                     }
                 }
             }
         ]
     }
-    requests.post(url, headers=headers, json=payload)
-
-def fetch_and_summarize():
-    all_news_raw = ""
-    # 確保新聞的即時性，使用最新排序
-    categories = [
-        (f"https://newsapi.org/v2/everything?q=台灣 OR 台北 OR 台積電&language=zh&sortBy=publishedAt&pageSize=20&apiKey={NEWS_API_KEY}", "國內"),
-        (f"https://newsapi.org/v2/top-headlines?language=en&pageSize=40&apiKey={NEWS_API_KEY}", "國際"),
-        (f"https://newsapi.org/v2/everything?q=AI OR 人工智慧 OR 核能 OR 科技突破&language=zh&sortBy=publishedAt&pageSize=20&apiKey={NEWS_API_KEY}", "科技")
-    ]
     
-    for url, label in categories:
-        try:
-            res = requests.get(url).json()
-            all_news_raw += f"\n--- {label} 素材 ---\n"
-            for a in res.get("articles", []):
-                all_news_raw += f"標題：{a.get('title', '')}\n摘要：{a.get('description', '')}\n\n"
-        except: pass
-
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        print("正在偵測可用 AI 模型...")
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        priority_list = ['models/gemini-2.5-flash', 'models/gemini-1.5-flash', 'models/gemini-1.5-pro']
-        final_attempt_list = [p for p in priority_list if p in available_models]
-        for m in available_models:
-            if m not in final_attempt_list: final_attempt_list.append(m)
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        print("✅ LINE 訊息推播成功！")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ LINE 訊息推播失敗: {e}")
+        if e.response is not None:
+             print(f"Response Body: {e.response.text}")
 
-        weather_raw, t_label, tm_label = get_detailed_weather()
-        ai_output = None
-        successful_model = None
-        
-        # 獲取今天與昨天的日期作參考
-        today_date = datetime.now()
-        yesterday_date = today_date - timedelta(days=1)
-        
-        prompt = f"""
-        你是一位頂級的「新聞主播」。請根據素材產出情報。
-        
-        【⚠️ 日期格式與時效限制】
-        1. 氣象部分：必須針對「今日與明日」進行播報，並標註『今({today_date.day})』與『明({(today_date + timedelta(days=1)).day})』。
-        2. 新聞部分：請播報昨晚或今日凌晨發生的最新動態。若提到日期，請使用『({yesterday_date.day})晚間』或『({today_date.day})凌晨』等格式。
-        3. 語言：100% 繁體中文，禁止夾雜英文句子。
-        4. 禁止使用 Markdown 粗體（**）。
-        
-        【輸出結構】請嚴格依照下方格式：
 
-        [WEATHER]
-        (請以「專業新聞主播」的口吻播報氣象。分析早中晚溫差、預測準確降雨時段，並給予具體的衣著與雨具提醒。請使用『今({today_date.day})』與『明({(today_date + timedelta(days=1)).day})』)
-        數據參考：{weather_raw}
+# ==========================================
+# 主程式執行流程
+# ==========================================
+def main():
+    print(f"啟動晨間新聞播報任務... ({datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')})")
 
-        [INTL]
-        (精選 5 篇全球焦點新聞，以主播口吻詳述事件。若提到日期請標註如 ({today_date.day}))
-        【1】新聞標題
-        (新聞細節...)
-        總結：(一句話精華)
+    # 1. 蒐集情報
+    print("⏳ 正在取得高雄氣象...")
+    weather_data = get_kaohsiung_weather()
+    
+    print("⏳ 正在取得全球焦點...")
+    global_news = get_news("global economy OR geopolitics")
+    
+    print("⏳ 正在取得國內時事...")
+    local_news = get_news("台灣 OR 台北 OR 台積電")
+    
+    print("⏳ 正在取得科技 AI 前沿...")
+    tech_news = get_news("generative AI OR semiconductor OR green energy")
 
-        [TW]
-        (精選 5 篇台灣國內新聞。若提到日期請標註如 ({today_date.day}))
-        【1】新聞標題
-        (新聞細節...)
-        總結：(一句話精華)
+    # 2. 生成洞察報告
+    print("⏳ 正在交由 Gemini 分析與整理...")
+    insights_text = generate_insights(weather_data, global_news, local_news, tech_news)
 
-        [AI]
-        (精選 5 篇科技、AI、核能發展新聞)
-        【1】新聞標題
-        (新聞細節...)
-        總結：(一句話精華)
+    # 3. 產生音檔 (V3.0 新增)
+    print("⏳ 正在生成早晨語音播報...")
+    audio_path, duration_ms = generate_audio(insights_text)
 
-        新聞素材：
-        {all_news_raw}
-        """
-        
-        for model_name in final_attempt_list:
-            try:
-                print(f"嘗試使用模型：{model_name}...")
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
-                ai_output = response.text
-                successful_model = model_name
-                print(f"✅ {model_name} 成功產出報告！")
-                break 
-            except Exception as e:
-                print(f"❌ {model_name} 失敗 (原因：{str(e)[:50]}...)")
-                continue
-
-        if not ai_output:
-            raise Exception("所有可用模型皆無法執行。")
-        
-        sections = {"WEATHER": "", "INTL": "", "TW": "", "AI": ""}
-        current_sec = ""
-        plain_text_builder = f"🤖 AI 晨間情報 ({datetime.now().strftime('%Y-%m-%d')})\n\n"
-        
-        for line in ai_output.split('\n'):
-            clean_line = line.replace("**", "").strip()
-            if "[WEATHER]" in clean_line: 
-                current_sec = "WEATHER"
-            elif "[INTL]" in clean_line: 
-                current_sec = "INTL"
-            elif "[TW]" in clean_line: 
-                current_sec = "TW"
-            elif "[AI]" in clean_line: 
-                current_sec = "AI"
-            elif current_sec: 
-                sections[current_sec] += clean_line + "\n"
-                plain_text_builder += clean_line + "\n"
-
-        send_line_flex_message(
-            sections["WEATHER"].strip(), 
-            sections["INTL"].strip(), 
-            sections["TW"].strip(), 
-            sections["AI"].strip(), 
-            successful_model
-        )
-        
-        with open("daily_report.md", "w", encoding="utf-8") as f:
-            f.write(plain_text_builder)
-            
-        print("✅ 任務圓滿完成！")
-
-    except Exception as e:
-        print(f"❌ 執行出錯：{e}")
+    # 4. 推播文字訊息
+    print("⏳ 正在透過 LINE 推播訊息...")
+    send_line_flex_message(insights_text)
+    
+    # [註] 未來我們會在這裡補上發送 AudioSendMessage 的邏輯，並串接 Google Drive。
+    
+    print("任務完成！")
 
 if __name__ == "__main__":
-    fetch_and_summarize()
+    main()
