@@ -2,9 +2,11 @@ import os
 import json
 import requests
 from datetime import datetime, timezone, timedelta
-import google.generativeai as genai
 from gtts import gTTS
 from mutagen.mp3 import MP3
+
+# 新版 Gemini SDK
+from google import genai
 
 # Google Drive API 相關套件
 from google.oauth2 import service_account
@@ -19,11 +21,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_USER_ID = os.environ.get("LINE_USER_ID")
 
-# V3.0 新增：Google Drive 設定
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-
-genai.configure(api_key=GEMINI_API_KEY)
 
 # ==========================================
 # 核心功能與工具模組
@@ -96,15 +95,21 @@ def generate_insights(weather_data, global_news, local_news, tech_news):
     - 每則新聞後方，請加入一段「**總結：**」（包含冒號），提供精闢的短評。
     """
     
+    # 升級為新版 SDK 調用方式
+    client = genai.Client(api_key=GEMINI_API_KEY)
     models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    
     for model_name in models:
         try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
             return response.text
         except Exception as e:
             print(f"Failed to generate with {model_name}: {e}")
             continue
+            
     return "抱歉，今日無法產生新聞洞察報告。"
 
 def generate_audio(full_news_text):
@@ -199,11 +204,7 @@ def send_line_flex_message(insights_text):
     except requests.exceptions.RequestException as e:
         print(f"❌ LINE 文字訊息推播失敗: {e}")
 
-# V3.0 新增：發送 LINE 語音訊息
 def send_line_audio_message(audio_url, duration_ms):
-    """
-    將上傳完成的音檔網址，發送為 LINE 語音訊息。
-    """
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
         "Content-Type": "application/json",
@@ -215,8 +216,8 @@ def send_line_audio_message(audio_url, duration_ms):
         "messages": [
             {
                 "type": "audio",
-                "originalContentUrl": audio_url, # 這是可以直接下載的 mp3 網址
-                "duration": duration_ms          # 必須是毫秒
+                "originalContentUrl": audio_url,
+                "duration": duration_ms
             }
         ]
     }
