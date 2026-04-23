@@ -10,18 +10,16 @@ LINE_ACCESS_TOKEN = os.getenv("LINE_ACCESS_TOKEN")
 LINE_USER_ID = os.getenv("LINE_USER_ID")
 
 def get_detailed_weather():
-    """獲取高雄詳細氣象數據 (含降雨機率與早中晚溫差)"""
+    """獲取高雄詳細氣象數據"""
     url = "https://api.open-meteo.com/v1/forecast?latitude=22.6163&longitude=120.3133&hourly=temperature_2m,precipitation_probability&daily=weathercode&timezone=Asia%2FTaipei&forecast_days=2"
     try:
         res = requests.get(url).json()
         hourly = res['hourly']
         
-        # 提取今日關鍵時段數據 (早上8點, 下午2點, 晚上8點)
         t_8 = hourly['temperature_2m'][8]
         t_14 = hourly['temperature_2m'][14]
         t_20 = hourly['temperature_2m'][20]
         
-        # 找出今日最高降雨機率及其時段
         today_rain_probs = hourly['precipitation_probability'][0:24]
         max_rain_prob = max(today_rain_probs)
         max_rain_hour = today_rain_probs.index(max_rain_prob)
@@ -29,7 +27,7 @@ def get_detailed_weather():
         weather_raw = f"""
         [高雄詳細氣象數據]
         今日氣溫分布：早上8點 {t_8}°C、下午2點 {t_14}°C、晚上8點 {t_20}°C。
-        今日降雨資訊：最高降雨機率為 {max_rain_prob}%，預計最可能降雨的時間點在 {max_rain_hour}:00 左右。
+        今日降雨資訊：最高降雨機率為 {max_rain_prob}%，最可能降雨時間點在 {max_rain_hour}:00 左右。
         """
         return weather_raw
     except Exception as e:
@@ -37,31 +35,37 @@ def get_detailed_weather():
         return "[高雄氣象數據] 目前系統連線異常，請主播以專業口吻提醒注意天氣變換。"
 
 def create_section(title, content):
-    """建立 Flex Message 的區塊結構，確保大標題與小內文層次分明"""
-    # 強制清除可能殘留的 Markdown 粗體符號
-    clean_content = content.replace("**", "").strip()
-    return [
+    """建立 Flex Message 區塊，並自動將「總結：」加粗且變色"""
+    blocks = [
         {
             "type": "text",
             "text": title,
             "weight": "bold",
-            "color": "#00FF41",
+            "color": "#00FF41", 
             "size": "md", 
             "margin": "lg"
-        },
-        {
-            "type": "text",
-            "text": clean_content,
-            "wrap": True,
-            "size": "sm",
-            "color": "#F5F5F5",
-            "lineSpacing": "6px",
-            "margin": "md"
         }
     ]
+    
+    for line in content.split('\n'):
+        line = line.replace("**", "").strip()
+        if not line: continue
+        
+        if line.startswith("總結："):
+            blocks.append({
+                "type": "text", "text": line, "weight": "bold", 
+                "color": "#FFD700", "size": "sm", "wrap": True, "margin": "sm"
+            })
+        else:
+            blocks.append({
+                "type": "text", "text": line, 
+                "color": "#F5F5F5", "size": "sm", "wrap": True, "margin": "sm"
+            })
+            
+    return blocks
 
-def send_line_structured_flex(weather_text, intl_text, tw_text, ai_text, model_name):
-    """發送結構化的深色模式 Flex Message"""
+def send_line_flex_message(weather_text, intl_text, tw_text, ai_text, model_name):
+    """發送單一結構化 Flex Message 卡片"""
     if not LINE_ACCESS_TOKEN or not LINE_USER_ID: return
 
     url = 'https://api.line.me/v2/bot/message/push'
@@ -69,41 +73,43 @@ def send_line_structured_flex(weather_text, intl_text, tw_text, ai_text, model_n
     
     body_contents = []
     if weather_text: body_contents.extend(create_section("🌦️ 氣象主播特報", weather_text))
-    if intl_text: body_contents.extend(create_section("🌍 國際焦點新聞", intl_text))
+    if intl_text: body_contents.extend(create_section("🌍 全球焦點新聞", intl_text))
     if tw_text: body_contents.extend(create_section("🇹🇼 國內時事脈動", tw_text))
-    if ai_text: body_contents.extend(create_section("🤖 AI 科技前沿", ai_text))
+    if ai_text: body_contents.extend(create_section("🤖 科技與 AI 前沿", ai_text))
 
     payload = {
         "to": LINE_USER_ID,
-        "messages": [{
-            "type": "flex",
-            "altText": "🌍 您的全方位晨間情報已送達！",
-            "contents": {
-                "type": "bubble",
-                "size": "mega",
-                "header": {
-                    "type": "box", "layout": "vertical", "backgroundColor": "#000000",
-                    "contents": [
-                        {"type": "text", "text": "🌍 全方位晨間情報", "weight": "bold", "color": "#FFFFFF", "size": "xl"},
-                        {"type": "text", "text": f"分析引擎: {model_name}", "color": "#888888", "size": "xs", "margin": "sm"}
-                    ]
-                },
-                "body": {
-                    "type": "box", "layout": "vertical", "backgroundColor": "#1A1A1A",
-                    "contents": body_contents
+        "messages": [
+            {
+                "type": "flex",
+                "altText": "🌍 您的全方位晨間情報已送達！",
+                "contents": {
+                    "type": "bubble", "size": "mega",
+                    "header": {
+                        "type": "box", "layout": "vertical", "backgroundColor": "#000000",
+                        "contents": [
+                            {"type": "text", "text": "🌍 全方位晨間情報", "weight": "bold", "color": "#FFFFFF", "size": "xl"},
+                            {"type": "text", "text": f"分析引擎: {model_name}", "color": "#888888", "size": "xs", "margin": "sm"}
+                        ]
+                    },
+                    "body": {
+                        "type": "box", "layout": "vertical", "backgroundColor": "#1A1A1A",
+                        "contents": body_contents
+                    }
                 }
             }
-        }]
+        ]
     }
     requests.post(url, headers=headers, json=payload)
 
 def fetch_and_summarize():
     all_news_raw = ""
     categories = [
-        (f"https://newsapi.org/v2/top-headlines?country=tw&pageSize=20&apiKey={NEWS_API_KEY}", "國內"),
-        (f"https://newsapi.org/v2/top-headlines?language=en&pageSize=20&apiKey={NEWS_API_KEY}", "國際"),
-        (f"https://newsapi.org/v2/everything?q=AI&pageSize=20&apiKey={NEWS_API_KEY}", "AI科技")
+        (f"https://newsapi.org/v2/everything?q=台灣 OR 台北 OR 台積電&language=zh&sortBy=publishedAt&pageSize=20&apiKey={NEWS_API_KEY}", "國內"),
+        (f"https://newsapi.org/v2/top-headlines?language=en&pageSize=40&apiKey={NEWS_API_KEY}", "國際"),
+        (f"https://newsapi.org/v2/everything?q=AI OR 人工智慧 OR 核能 OR 科技突破&language=zh&sortBy=publishedAt&pageSize=20&apiKey={NEWS_API_KEY}", "科技")
     ]
+    
     for url, label in categories:
         try:
             res = requests.get(url).json()
@@ -113,7 +119,6 @@ def fetch_and_summarize():
         except: pass
 
     try:
-        # 🌟 找回最強的 AI 模型偵測與自動切換機制
         genai.configure(api_key=GEMINI_API_KEY)
         print("正在偵測可用 AI 模型...")
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -121,29 +126,41 @@ def fetch_and_summarize():
         priority_list = ['models/gemini-2.5-flash', 'models/gemini-1.5-flash', 'models/gemini-1.5-pro']
         final_attempt_list = [p for p in priority_list if p in available_models]
         for m in available_models:
-            if m not in final_attempt_list:
-                final_attempt_list.append(m)
+            if m not in final_attempt_list: final_attempt_list.append(m)
 
         weather_raw = get_detailed_weather()
         ai_output = None
         successful_model = None
         
         prompt = f"""
-        你是一位頂級「新聞主播」兼「領域首席專家」。請根據素材產出情報。
+        你是一位頂級的「新聞主播」。請根據素材產出情報，所有內容請用「沉穩、專業且具備新聞播報感」的口吻撰寫，不要有任何多餘的打招呼。
         
-        【要求】
-        1. 語言：100% 繁體中文。
-        2. 格式：絕對禁止使用 Markdown 粗體符號（**）。請直接輸出純文字。
-        3. 語氣：直接破題，不要出現「好的」、「以下是」等冗餘開頭。
-        4. 內容：每個主題精選 5 篇新聞。
-        5. 氣象：扮演專業氣象主播，分析溫差變化、準確預測降雨時段，並給予具體的衣著/雨具建議。
-        6. 新聞結構：
-           【新聞序號】標題文字
-           (直接說明新聞內容，不使用標籤文字，單純敘述事件)
-           進一步思考：(由專家給出深度、犀利的看法)
+        【⚠️ 絕對嚴格限制】
+        1. 語言：100% 繁體中文，禁止夾雜英文句子。
+        2. 格式：禁止使用 Markdown 粗體（**）。
+        3. 總結限制：每則新聞的最後，必須且只能用「總結：」兩個字作為開頭，用一句話（不超過 30 字）精煉該新聞的影響。
+        
+        【內容篩選指令】
+        - 國際新聞：精選 5 篇。絕對不要選美國國內小政治！必須選擇「會影響全人類、地緣政治、或國際重大經濟」的全球焦點。
+        - 國內新聞：精選 5 篇。選擇與台灣社會、經濟或民生最相關的重大新聞。
+        - 科技新聞：精選 5 篇。僅聚焦於「AI 人工智慧發展」、「核能與新能源」或「改變世界的科技突破」。
 
-        請務必將四個部分用 [WEATHER], [INTL], [TW], [AI] 標籤隔開輸出，方便系統解析。
-        
+        【輸出結構】請嚴格依照下方格式：
+        [WEATHER]
+        (扮演氣象主播，播報溫差、明確降雨時間，並給予衣著與雨具提醒)
+        [INTL]
+        【1】新聞標題
+        (以主播口吻詳述事件細節...)
+        總結：(一句話精華)
+        [TW]
+        【1】新聞標題
+        (以主播口吻詳述事件細節...)
+        總結：(一句話精華)
+        [AI]
+        【1】新聞標題
+        (以主播口吻詳述事件細節...)
+        總結：(一句話精華)
+
         素材：
         氣象：{weather_raw}
         新聞：{all_news_raw}
@@ -159,7 +176,7 @@ def fetch_and_summarize():
                 print(f"✅ {model_name} 成功產出報告！")
                 break 
             except Exception as e:
-                print(f"❌ {model_name} 失敗 (原因：{str(e)[:50]}...)，嘗試下一個...")
+                print(f"❌ {model_name} 失敗 (原因：{str(e)[:50]}...)")
                 continue
 
         if not ai_output:
@@ -168,15 +185,24 @@ def fetch_and_summarize():
         # 解析 AI 輸出的內容
         sections = {"WEATHER": "", "INTL": "", "TW": "", "AI": ""}
         current_sec = ""
+        plain_text_builder = f"🤖 AI 晨間情報 ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+        
         for line in ai_output.split('\n'):
-            if "[WEATHER]" in line: current_sec = "WEATHER"
-            elif "[INTL]" in line: current_sec = "INTL"
-            elif "[TW]" in line: current_sec = "TW"
-            elif "[AI]" in line: current_sec = "AI"
-            elif current_sec: sections[current_sec] += line + "\n"
+            clean_line = line.replace("**", "").strip()
+            if "[WEATHER]" in clean_line: 
+                current_sec = "WEATHER"
+            elif "[INTL]" in clean_line: 
+                current_sec = "INTL"
+            elif "[TW]" in clean_line: 
+                current_sec = "TW"
+            elif "[AI]" in clean_line: 
+                current_sec = "AI"
+            elif current_sec: 
+                sections[current_sec] += clean_line + "\n"
+                plain_text_builder += clean_line + "\n"
 
-        # 發送結構化訊息
-        send_line_structured_flex(
+        # 僅發送精美卡片
+        send_line_flex_message(
             sections["WEATHER"].strip(), 
             sections["INTL"].strip(), 
             sections["TW"].strip(), 
@@ -184,6 +210,10 @@ def fetch_and_summarize():
             successful_model
         )
         
+        # 依然保留 GitHub 本地的文字檔備份
+        with open("daily_report.md", "w", encoding="utf-8") as f:
+            f.write(plain_text_builder)
+            
         print("✅ 任務圓滿完成！")
 
     except Exception as e:
