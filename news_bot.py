@@ -242,7 +242,7 @@ def send_line_audio_message(audio_url, duration_ms):
 # 主程式執行流程
 # ==========================================
 def main():
-    print(f"啟動晨間新聞播播任務... ({datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')})")
+    print(f"啟動晨間新聞播報任務... ({datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')})")
 
     print("⏳ 正在取得新聞與天氣情報...")
     weather_data = get_kaohsiung_weather()
@@ -256,4 +256,18 @@ def main():
     print("⏳ 正在推播 LINE 文字訊息 (Flex Message)...")
     send_line_flex_message(insights_text)
 
-    print("⏳ 正在生成早晨語音播報
+    print("⏳ 正在生成早晨語音播報...")
+    audio_path, duration_ms = generate_audio(insights_text)
+
+    if audio_path:
+        print("⏳ 準備備份音檔至雲端硬碟...")
+        audio_url = upload_audio_to_drive(audio_path)
+        
+        if audio_url:
+            print("⏳ 正在推播 LINE 語音訊息...")
+            send_line_audio_message(audio_url, duration_ms)
+
+    print("任務完成！")
+
+if __name__ == "__main__":
+    main()
