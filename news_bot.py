@@ -1,11 +1,14 @@
 import os
 import requests
 from datetime import datetime, timezone, timedelta
-import google.generativeai as genai
 from gtts import gTTS
 from mutagen.mp3 import MP3
 
-# Google Drive API 相關套件 (改用個人授權模式)
+# V3.0 新增：新版 Google GenAI 套件
+from google import genai
+from google.genai import types
+
+# V3.0 新增：Google Drive API 相關套件 (改用個人授權模式)
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -18,14 +21,17 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_USER_ID = os.environ.get("LINE_USER_ID")
 
-# V3.0 更新：Google Drive 個人帳號三寶
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID")
 GDRIVE_CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID")
 GDRIVE_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET")
 GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN")
 
-# 設定 Gemini API (日誌中的 Warning 只是提醒未來更新，目前可安心使用)
-genai.configure(api_key=GEMINI_API_KEY)
+# 初始化新版 Gemini 客戶端
+try:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+except Exception as e:
+    print(f"⚠️ Gemini Client 初始化失敗 (請檢查金鑰): {e}")
+    gemini_client = None
 
 # ==========================================
 # 核心功能與工具模組
@@ -44,7 +50,6 @@ def get_kaohsiung_weather():
         response.raise_for_status()
         data = response.json()
         daily = data.get("daily", {})
-        
         weather_info = (
             f"最高溫: {daily.get('temperature_2m_max', ['N/A'])[0]}°C, "
             f"最低溫: {daily.get('temperature_2m_min', ['N/A'])[0]}°C, "
@@ -75,6 +80,9 @@ def get_news(query, language="zh"):
         return "無法取得新聞"
 
 def generate_insights(weather_data, global_news, local_news, tech_news):
+    if not gemini_client:
+        return "抱歉，Gemini 客戶端未正確初始化，今日無法產生新聞洞察報告。"
+
     prompt = f"""
     你現在是一位專業、具備前瞻視野的 AI 新聞主播。
     請根據以下資訊，整理出一份條理分明、具備深度洞察的晨間新聞播報稿。
@@ -98,11 +106,15 @@ def generate_insights(weather_data, global_news, local_news, tech_news):
     - 每則新聞後方，請加入一段「**總結：**」（包含冒號），提供精闢的短評。
     """
     
+    # 支援的新版模型名稱 (依優先順序)
     models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
     for model_name in models:
         try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
+            # 使用新版 SDK 的呼叫方式
+            response = gemini_client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
             return response.text
         except Exception as e:
             print(f"Failed to generate with {model_name}: {e}")
@@ -130,7 +142,6 @@ def upload_audio_to_drive(file_path):
 
     try:
         print("⏳ 正在驗證 Google 個人帳號授權...")
-        # 改用 Refresh Token 取得授權
         creds = Credentials(
             token=None,
             refresh_token=GDRIVE_REFRESH_TOKEN,
