@@ -32,18 +32,18 @@ def get_detailed_weather():
         return weather_raw
     except Exception as e:
         print(f"氣象擷取錯誤: {e}")
-        return "[高雄氣象數據] 目前系統連線異常，請主播以專業口吻提醒注意天氣變換。"
+        return "[高雄氣象數據] 目前系統連線異常，請提醒注意天氣變換。"
 
 def create_section(title, content):
-    """建立 Flex Message 區塊，並自動將「總結：」加粗且變色"""
+    """建立 Flex Message 區塊，並針對「新聞標題」與「總結」做特殊排版"""
     blocks = [
         {
             "type": "text",
             "text": title,
             "weight": "bold",
-            "color": "#00FF41", 
-            "size": "md", 
-            "margin": "lg"
+            "color": "#00FF41", # 大分類標題：駭客綠
+            "size": "lg",       # 尺寸加大到 lg
+            "margin": "xl"      # 增加上方間距
         }
     ]
     
@@ -51,15 +51,23 @@ def create_section(title, content):
         line = line.replace("**", "").strip()
         if not line: continue
         
+        # 特殊排版 1：偵測到「總結：」，賦予專屬金色與粗體
         if line.startswith("總結："):
             blocks.append({
                 "type": "text", "text": line, "weight": "bold", 
-                "color": "#FFD700", "size": "sm", "wrap": True, "margin": "sm"
+                "color": "#FFD700", "size": "sm", "wrap": True, "margin": "md"
             })
+        # 特殊排版 2：偵測到新聞標題 (帶有【】符號)，放大字體、加粗、純白色
+        elif line.startswith("【") and "】" in line:
+            blocks.append({
+                "type": "text", "text": line, "weight": "bold", 
+                "color": "#FFFFFF", "size": "md", "wrap": True, "margin": "lg"
+            })
+        # 一般內文：維持舒適的淺灰小字
         else:
             blocks.append({
                 "type": "text", "text": line, 
-                "color": "#F5F5F5", "size": "sm", "wrap": True, "margin": "sm"
+                "color": "#E0E0E0", "size": "sm", "wrap": True, "margin": "sm"
             })
             
     return blocks
@@ -133,37 +141,41 @@ def fetch_and_summarize():
         successful_model = None
         
         prompt = f"""
-        你是一位頂級的「新聞主播」。請根據素材產出情報，所有內容請用「沉穩、專業且具備新聞播報感」的口吻撰寫，不要有任何多餘的打招呼。
+        你是一位頂級的「新聞主播」。請根據素材產出情報。
         
         【⚠️ 絕對嚴格限制】
         1. 語言：100% 繁體中文，禁止夾雜英文句子。
         2. 格式：禁止使用 Markdown 粗體（**）。
-        3. 總結限制：每則新聞的最後，必須且只能用「總結：」兩個字作為開頭，用一句話（不超過 30 字）精煉該新聞的影響。
         
-        【內容篩選指令】
-        - 國際新聞：精選 5 篇。絕對不要選美國國內小政治！必須選擇「會影響全人類、地緣政治、或國際重大經濟」的全球焦點。
-        - 國內新聞：精選 5 篇。選擇與台灣社會、經濟或民生最相關的重大新聞。
-        - 科技新聞：精選 5 篇。僅聚焦於「AI 人工智慧發展」、「核能與新能源」或「改變世界的科技突破」。
-
         【輸出結構】請嚴格依照下方格式：
-        [WEATHER]
-        (扮演氣象主播，播報溫差、明確降雨時間，並給予衣著與雨具提醒)
-        [INTL]
-        【1】新聞標題
-        (以主播口吻詳述事件細節...)
-        總結：(一句話精華)
-        [TW]
-        【1】新聞標題
-        (以主播口吻詳述事件細節...)
-        總結：(一句話精華)
-        [AI]
-        【1】新聞標題
-        (以主播口吻詳述事件細節...)
-        總結：(一句話精華)
 
-        素材：
-        氣象：{weather_raw}
-        新聞：{all_news_raw}
+        [WEATHER]
+        (請化身「專業氣象主播」，用溫暖且專業的口吻播報以下數據。必須包含早中晚溫差變化、精準降雨時段預測，並給予具體的「穿搭建議」與「雨具提醒」。)
+        氣象數據：{weather_raw}
+
+        [INTL]
+        (精選 5 篇影響全人類或國際局勢的新聞，以沉穩專業的主播口吻詳述)
+        【1】新聞標題
+        (新聞細節...)
+        總結：(一句話精華)
+        (依此類推)
+
+        [TW]
+        (精選 5 篇與台灣社會、經濟最相關的重大新聞，以主播口吻詳述)
+        【1】新聞標題
+        (新聞細節...)
+        總結：(一句話精華)
+        (依此類推)
+
+        [AI]
+        (精選 5 篇聚焦於 AI、核能或科技突破，以主播口吻詳述)
+        【1】新聞標題
+        (新聞細節...)
+        總結：(一句話精華)
+        (依此類推)
+
+        新聞素材：
+        {all_news_raw}
         """
         
         for model_name in final_attempt_list:
@@ -201,7 +213,7 @@ def fetch_and_summarize():
                 sections[current_sec] += clean_line + "\n"
                 plain_text_builder += clean_line + "\n"
 
-        # 僅發送精美卡片
+        # 發送精美卡片
         send_line_flex_message(
             sections["WEATHER"].strip(), 
             sections["INTL"].strip(), 
@@ -210,7 +222,7 @@ def fetch_and_summarize():
             successful_model
         )
         
-        # 依然保留 GitHub 本地的文字檔備份
+        # 保留 GitHub 本地的文字檔備份
         with open("daily_report.md", "w", encoding="utf-8") as f:
             f.write(plain_text_builder)
             
