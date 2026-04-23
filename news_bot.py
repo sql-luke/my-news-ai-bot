@@ -1,7 +1,7 @@
 import os
 import requests
 import google.generativeai as genai
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 1. API 金鑰與設定
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
@@ -10,40 +10,49 @@ LINE_ACCESS_TOKEN = os.getenv("LINE_ACCESS_TOKEN")
 LINE_USER_ID = os.getenv("LINE_USER_ID")
 
 def get_detailed_weather():
-    """獲取高雄詳細氣象數據"""
+    """獲取高雄詳細氣象數據，並預備日期標籤"""
     url = "https://api.open-meteo.com/v1/forecast?latitude=22.6163&longitude=120.3133&hourly=temperature_2m,precipitation_probability&daily=weathercode&timezone=Asia%2FTaipei&forecast_days=2"
     try:
         res = requests.get(url).json()
         hourly = res['hourly']
         
+        # 取得今天與明天的日期
+        today = datetime.now()
+        tomorrow = today + timedelta(days=1)
+        today_label = f"今({today.day})"
+        tomorrow_label = f"明({tomorrow.day})"
+        
+        # 今日關鍵時段
         t_8 = hourly['temperature_2m'][8]
         t_14 = hourly['temperature_2m'][14]
         t_20 = hourly['temperature_2m'][20]
         
+        # 降雨機率分析
         today_rain_probs = hourly['precipitation_probability'][0:24]
         max_rain_prob = max(today_rain_probs)
         max_rain_hour = today_rain_probs.index(max_rain_prob)
         
         weather_raw = f"""
-        [高雄詳細氣象數據]
-        今日氣溫分布：早上8點 {t_8}°C、下午2點 {t_14}°C、晚上8點 {t_20}°C。
-        今日降雨資訊：最高降雨機率為 {max_rain_prob}%，最可能降雨時間點在 {max_rain_hour}:00 左右。
+        [高雄氣象數據參考]
+        今日標籤：{today_label}，氣溫：早上8點 {t_8}°C、下午2點 {t_14}°C、晚上8點 {t_20}°C。
+        今日降雨：最高機率 {max_rain_prob}%，預計最可能降雨在 {max_rain_hour}:00 左右。
+        明日標籤：{tomorrow_label}，請主播根據數據一併預報明日趨勢。
         """
-        return weather_raw
+        return weather_raw, today_label, tomorrow_label
     except Exception as e:
         print(f"氣象擷取錯誤: {e}")
-        return "[高雄氣象數據] 目前系統連線異常，請提醒注意天氣變換。"
+        return "[高雄氣象數據] 系統異常，請提醒注意天氣。", "今日", "明日"
 
 def create_section(title, content):
-    """建立 Flex Message 區塊，並針對「新聞標題」與「總結」做特殊排版"""
+    """建立 Flex Message 區塊，優化標題明顯度與間距"""
     blocks = [
         {
             "type": "text",
             "text": title,
             "weight": "bold",
-            "color": "#00FF41", # 大分類標題：駭客綠
-            "size": "lg",       # 尺寸加大到 lg
-            "margin": "xl"      # 增加上方間距
+            "color": "#00FF41", 
+            "size": "lg",       
+            "margin": "xl"      
         }
     ]
     
@@ -51,19 +60,19 @@ def create_section(title, content):
         line = line.replace("**", "").strip()
         if not line: continue
         
-        # 特殊排版 1：偵測到「總結：」，賦予專屬金色與粗體
+        # 總結樣式
         if line.startswith("總結："):
             blocks.append({
                 "type": "text", "text": line, "weight": "bold", 
                 "color": "#FFD700", "size": "sm", "wrap": True, "margin": "md"
             })
-        # 特殊排版 2：偵測到新聞標題 (帶有【】符號)，放大字體、加粗、純白色
+        # 新聞標題樣式：放大、加粗、純白
         elif line.startswith("【") and "】" in line:
             blocks.append({
                 "type": "text", "text": line, "weight": "bold", 
                 "color": "#FFFFFF", "size": "md", "wrap": True, "margin": "lg"
             })
-        # 一般內文：維持舒適的淺灰小字
+        # 一般內文樣式
         else:
             blocks.append({
                 "type": "text", "text": line, 
@@ -112,6 +121,7 @@ def send_line_flex_message(weather_text, intl_text, tw_text, ai_text, model_name
 
 def fetch_and_summarize():
     all_news_raw = ""
+    # 確保新聞的即時性，使用最新排序
     categories = [
         (f"https://newsapi.org/v2/everything?q=台灣 OR 台北 OR 台積電&language=zh&sortBy=publishedAt&pageSize=20&apiKey={NEWS_API_KEY}", "國內"),
         (f"https://newsapi.org/v2/top-headlines?language=en&pageSize=40&apiKey={NEWS_API_KEY}", "國際"),
@@ -136,43 +146,46 @@ def fetch_and_summarize():
         for m in available_models:
             if m not in final_attempt_list: final_attempt_list.append(m)
 
-        weather_raw = get_detailed_weather()
+        weather_raw, t_label, tm_label = get_detailed_weather()
         ai_output = None
         successful_model = None
+        
+        # 獲取今天與昨天的日期作參考
+        today_date = datetime.now()
+        yesterday_date = today_date - timedelta(days=1)
         
         prompt = f"""
         你是一位頂級的「新聞主播」。請根據素材產出情報。
         
-        【⚠️ 絕對嚴格限制】
-        1. 語言：100% 繁體中文，禁止夾雜英文句子。
-        2. 格式：禁止使用 Markdown 粗體（**）。
+        【⚠️ 日期格式與時效限制】
+        1. 氣象部分：必須針對「今日與明日」進行播報，並標註『今({today_date.day})』與『明({(today_date + timedelta(days=1)).day})』。
+        2. 新聞部分：請播報昨晚或今日凌晨發生的最新動態。若提到日期，請使用『({yesterday_date.day})晚間』或『({today_date.day})凌晨』等格式。
+        3. 語言：100% 繁體中文，禁止夾雜英文句子。
+        4. 禁止使用 Markdown 粗體（**）。
         
         【輸出結構】請嚴格依照下方格式：
 
         [WEATHER]
-        (請化身「專業氣象主播」，用溫暖且專業的口吻播報以下數據。必須包含早中晚溫差變化、精準降雨時段預測，並給予具體的「穿搭建議」與「雨具提醒」。)
-        氣象數據：{weather_raw}
+        (請以「專業新聞主播」的口吻播報氣象。分析早中晚溫差、預測準確降雨時段，並給予具體的衣著與雨具提醒。請使用『今({today_date.day})』與『明({(today_date + timedelta(days=1)).day})』)
+        數據參考：{weather_raw}
 
         [INTL]
-        (精選 5 篇影響全人類或國際局勢的新聞，以沉穩專業的主播口吻詳述)
+        (精選 5 篇全球焦點新聞，以主播口吻詳述事件。若提到日期請標註如 ({today_date.day}))
         【1】新聞標題
         (新聞細節...)
         總結：(一句話精華)
-        (依此類推)
 
         [TW]
-        (精選 5 篇與台灣社會、經濟最相關的重大新聞，以主播口吻詳述)
+        (精選 5 篇台灣國內新聞。若提到日期請標註如 ({today_date.day}))
         【1】新聞標題
         (新聞細節...)
         總結：(一句話精華)
-        (依此類推)
 
         [AI]
-        (精選 5 篇聚焦於 AI、核能或科技突破，以主播口吻詳述)
+        (精選 5 篇科技、AI、核能發展新聞)
         【1】新聞標題
         (新聞細節...)
         總結：(一句話精華)
-        (依此類推)
 
         新聞素材：
         {all_news_raw}
@@ -194,7 +207,6 @@ def fetch_and_summarize():
         if not ai_output:
             raise Exception("所有可用模型皆無法執行。")
         
-        # 解析 AI 輸出的內容
         sections = {"WEATHER": "", "INTL": "", "TW": "", "AI": ""}
         current_sec = ""
         plain_text_builder = f"🤖 AI 晨間情報 ({datetime.now().strftime('%Y-%m-%d')})\n\n"
@@ -213,7 +225,6 @@ def fetch_and_summarize():
                 sections[current_sec] += clean_line + "\n"
                 plain_text_builder += clean_line + "\n"
 
-        # 發送精美卡片
         send_line_flex_message(
             sections["WEATHER"].strip(), 
             sections["INTL"].strip(), 
@@ -222,7 +233,6 @@ def fetch_and_summarize():
             successful_model
         )
         
-        # 保留 GitHub 本地的文字檔備份
         with open("daily_report.md", "w", encoding="utf-8") as f:
             f.write(plain_text_builder)
             
