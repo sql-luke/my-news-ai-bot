@@ -1,15 +1,12 @@
 import os
-import json
 import requests
 from datetime import datetime, timezone, timedelta
+import google.generativeai as genai
 from gtts import gTTS
 from mutagen.mp3 import MP3
 
-# 新版 Gemini SDK
-from google import genai
-
-# Google Drive API 相關套件
-from google.oauth2 import service_account
+# Google Drive API 相關套件 (改用個人授權模式)
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -21,8 +18,14 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_USER_ID = os.environ.get("LINE_USER_ID")
 
+# V3.0 更新：Google Drive 個人帳號三寶
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID")
-GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+GDRIVE_CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID")
+GDRIVE_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET")
+GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN")
+
+# 設定 Gemini API (日誌中的 Warning 只是提醒未來更新，目前可安心使用)
+genai.configure(api_key=GEMINI_API_KEY)
 
 # ==========================================
 # 核心功能與工具模組
@@ -95,21 +98,15 @@ def generate_insights(weather_data, global_news, local_news, tech_news):
     - 每則新聞後方，請加入一段「**總結：**」（包含冒號），提供精闢的短評。
     """
     
-    # 升級為新版 SDK 調用方式
-    client = genai.Client(api_key=GEMINI_API_KEY)
     models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-    
     for model_name in models:
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
             return response.text
         except Exception as e:
             print(f"Failed to generate with {model_name}: {e}")
             continue
-            
     return "抱歉，今日無法產生新聞洞察報告。"
 
 def generate_audio(full_news_text):
@@ -127,15 +124,19 @@ def generate_audio(full_news_text):
          return None, None
 
 def upload_audio_to_drive(file_path):
-    if not GOOGLE_CREDENTIALS_JSON or not GDRIVE_FOLDER_ID:
-        print("⚠️ 缺少 Google Drive 金鑰或 Folder ID，跳過上傳。")
+    if not GDRIVE_CLIENT_ID or not GDRIVE_CLIENT_SECRET or not GDRIVE_REFRESH_TOKEN or not GDRIVE_FOLDER_ID:
+        print("⚠️ 缺少 Google Drive 三寶金鑰或 Folder ID，跳過上傳。")
         return None
 
     try:
-        print("⏳ 正在驗證 Google Drive 金鑰...")
-        creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
-        creds = service_account.Credentials.from_service_account_info(
-            creds_info, scopes=['https://www.googleapis.com/auth/drive']
+        print("⏳ 正在驗證 Google 個人帳號授權...")
+        # 改用 Refresh Token 取得授權
+        creds = Credentials(
+            token=None,
+            refresh_token=GDRIVE_REFRESH_TOKEN,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=GDRIVE_CLIENT_ID,
+            client_secret=GDRIVE_CLIENT_SECRET
         )
         service = build('drive', 'v3', credentials=creds)
 
@@ -147,7 +148,7 @@ def upload_audio_to_drive(file_path):
         
         media = MediaFileUpload(file_path, mimetype='audio/mpeg')
 
-        print("⏳ 正在上傳音檔至 Google Drive...")
+        print("⏳ 正在上傳音檔至 Google Drive (個人空間)...")
         file = service.files().create(
             body=file_metadata,
             media_body=media,
@@ -227,8 +228,6 @@ def send_line_audio_message(audio_url, duration_ms):
         print("✅ LINE 語音訊息推播成功！使用者現在可以聽新聞了🎧")
     except requests.exceptions.RequestException as e:
         print(f"❌ LINE 語音訊息推播失敗: {e}")
-        if e.response is not None:
-             print(f"Response Body: {e.response.text}")
 
 # ==========================================
 # 主程式執行流程
