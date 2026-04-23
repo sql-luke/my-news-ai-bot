@@ -21,9 +21,8 @@ LINE_USER_ID = os.environ.get("LINE_USER_ID")
 
 # V3.0 新增：Google Drive 設定
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID")
-GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON") # 讀取 JSON 字串
+GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 
-# 設定 Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
 
 # ==========================================
@@ -123,23 +122,18 @@ def generate_audio(full_news_text):
          return None, None
 
 def upload_audio_to_drive(file_path):
-    """
-    將生成的 MP3 檔案上傳至 Google Drive，並回傳 LINE 支援的直連網址。
-    """
     if not GOOGLE_CREDENTIALS_JSON or not GDRIVE_FOLDER_ID:
         print("⚠️ 缺少 Google Drive 金鑰或 Folder ID，跳過上傳。")
         return None
 
     try:
         print("⏳ 正在驗證 Google Drive 金鑰...")
-        # 將 JSON 字串轉換為字典
         creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
         creds = service_account.Credentials.from_service_account_info(
             creds_info, scopes=['https://www.googleapis.com/auth/drive']
         )
         service = build('drive', 'v3', credentials=creds)
 
-        # 設定檔案名稱（加上當天日期）與上傳目標資料夾
         date_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d")
         file_metadata = {
             'name': f'AI_News_{date_str}.mp3',
@@ -156,19 +150,15 @@ def upload_audio_to_drive(file_path):
         ).execute()
 
         file_id = file.get('id')
-        
-        # 轉換為直接下載網址 (Direct Link)
         direct_link = f"https://drive.google.com/uc?export=download&id={file_id}"
         print(f"✅ 上傳成功！取得公開直連網址：{direct_link}")
         
         return direct_link
-
     except Exception as e:
         print(f"❌ 上傳至 Google Drive 失敗: {e}")
         return None
 
 def send_line_flex_message(insights_text):
-    # 此處保留您 V2.0 的 Flex Message 邏輯 (文字推播)
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
         "Content-Type": "application/json",
@@ -207,7 +197,37 @@ def send_line_flex_message(insights_text):
         requests.post(url, headers=headers, json=payload).raise_for_status()
         print("✅ LINE 文字訊息推播成功！")
     except requests.exceptions.RequestException as e:
-        print(f"❌ LINE 訊息推播失敗: {e}")
+        print(f"❌ LINE 文字訊息推播失敗: {e}")
+
+# V3.0 新增：發送 LINE 語音訊息
+def send_line_audio_message(audio_url, duration_ms):
+    """
+    將上傳完成的音檔網址，發送為 LINE 語音訊息。
+    """
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
+    }
+
+    payload = {
+        "to": LINE_USER_ID,
+        "messages": [
+            {
+                "type": "audio",
+                "originalContentUrl": audio_url, # 這是可以直接下載的 mp3 網址
+                "duration": duration_ms          # 必須是毫秒
+            }
+        ]
+    }
+    
+    try:
+        requests.post(url, headers=headers, json=payload).raise_for_status()
+        print("✅ LINE 語音訊息推播成功！使用者現在可以聽新聞了🎧")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ LINE 語音訊息推播失敗: {e}")
+        if e.response is not None:
+             print(f"Response Body: {e.response.text}")
 
 # ==========================================
 # 主程式執行流程
@@ -234,9 +254,9 @@ def main():
         print("⏳ 準備備份音檔至雲端硬碟...")
         audio_url = upload_audio_to_drive(audio_path)
         
-        # [註] 下一步我們將在這裡新增發送 LINE 語音訊息的程式碼
         if audio_url:
-            print(f"💡 準備好用這個網址發送語音訊息：{audio_url}")
+            print("⏳ 正在推播 LINE 語音訊息...")
+            send_line_audio_message(audio_url, duration_ms)
 
     print("任務完成！")
 
