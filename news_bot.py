@@ -5,7 +5,11 @@ from datetime import datetime, timezone, timedelta
 from gtts import gTTS
 from mutagen.mp3 import MP3
 
+# V3.0：使用新版 Google GenAI 套件
 from google import genai
+from google.genai import types
+
+# V3.0：Google Drive API 相關套件 (個人帳號 OAuth 授權模式)
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -18,13 +22,19 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_USER_ID = os.environ.get("LINE_USER_ID")
 
+# Google Drive 個人帳號三寶
 GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID")
 GDRIVE_CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID")
 GDRIVE_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET")
 GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN")
 
+# 初始化新版 Gemini 客戶端
 try:
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    if GEMINI_API_KEY:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    else:
+        print("⚠️ 未偵測到 GEMINI_API_KEY")
+        gemini_client = None
 except Exception as e:
     print(f"⚠️ Gemini Client 初始化失敗: {e}")
     gemini_client = None
@@ -99,10 +109,10 @@ def generate_insights(weather_data, global_news, local_news, tech_news):
     - 每則新聞後方，請加入一段「**總結：**」（包含冒號），提供精闢的短評。
     """
     
-    # 加入重試機制，對付 503 伺服器忙碌
-    models = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    # 支援的新版模型清單與自動重試機制
+    models = ["gemini-2.0-flash", "gemini-1.5-flash"]
     for model_name in models:
-        for attempt in range(2): # 每個模型最多嘗試 2 次
+        for attempt in range(2):
             try:
                 response = gemini_client.models.generate_content(
                     model=model_name,
@@ -113,15 +123,16 @@ def generate_insights(weather_data, global_news, local_news, tech_news):
                 error_msg = str(e)
                 print(f"⚠️ 嘗試 {model_name} 失敗 (第 {attempt+1} 次): {error_msg}")
                 if "503" in error_msg or "429" in error_msg:
-                    print("⏳ 伺服器忙碌中，等待 5 秒後重試...")
+                    print("⏳ 伺服器忙碌，等待 5 秒後重試...")
                     time.sleep(5)
                     continue
                 else:
-                    break # 非 503 錯誤直接換下一個模型
+                    break
     return "抱歉，今日無法產生新聞洞察報告。"
 
 def generate_audio(full_news_text):
     audio_path = "morning_news.mp3"
+    # 清理 Markdown 符號以免語音朗讀異常
     clean_text = full_news_text.replace("**", "").replace("#", "").replace("---", "。")
     try:
         tts = gTTS(text=clean_text, lang='zh-TW', slow=False)
@@ -135,8 +146,8 @@ def generate_audio(full_news_text):
          return None, None
 
 def upload_audio_to_drive(file_path):
-    if not GDRIVE_CLIENT_ID or not GDRIVE_CLIENT_SECRET or not GDRIVE_REFRESH_TOKEN or not GDRIVE_FOLDER_ID:
-        print("⚠️ 缺少 Google Drive 三寶金鑰或 Folder ID，跳過上傳。")
+    if not all([GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN, GDRIVE_FOLDER_ID]):
+        print("⚠️ 缺少 Google Drive 必要金鑰，跳過上傳。")
         return None
 
     try:
@@ -166,8 +177,9 @@ def upload_audio_to_drive(file_path):
         ).execute()
 
         file_id = file.get('id')
+        # 轉換為 LINE 可讀取的直接下載網址
         direct_link = f"https://drive.google.com/uc?export=download&id={file_id}"
-        print(f"✅ 上傳成功！取得公開直連網址：{direct_link}")
+        print(f"✅ 上傳成功！直連網址：{direct_link}")
         return direct_link
     except Exception as e:
         print(f"❌ 上傳至 Google Drive 失敗: {e}")
@@ -209,9 +221,10 @@ def send_line_flex_message(insights_text):
     }
     
     try:
-        requests.post(url, headers=headers, json=payload).raise_for_status()
+        res = requests.post(url, headers=headers, json=payload)
+        res.raise_for_status()
         print("✅ LINE 文字訊息推播成功！")
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         print(f"❌ LINE 文字訊息推播失敗: {e}")
 
 def send_line_audio_message(audio_url, duration_ms):
@@ -233,9 +246,10 @@ def send_line_audio_message(audio_url, duration_ms):
     }
     
     try:
-        requests.post(url, headers=headers, json=payload).raise_for_status()
-        print("✅ LINE 語音訊息推播成功！使用者現在可以聽新聞了🎧")
-    except requests.exceptions.RequestException as e:
+        res = requests.post(url, headers=headers, json=payload)
+        res.raise_for_status()
+        print("✅ LINE 語音訊息推播成功！🎧")
+    except Exception as e:
         print(f"❌ LINE 語音訊息推播失敗: {e}")
 
 # ==========================================
@@ -244,21 +258,26 @@ def send_line_audio_message(audio_url, duration_ms):
 def main():
     print(f"啟動晨間新聞播報任務... ({datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')})")
 
+    # 1. 取得素材
     print("⏳ 正在取得新聞與天氣情報...")
     weather_data = get_kaohsiung_weather()
     global_news = get_news("global economy OR geopolitics")
     local_news = get_news("台灣 OR 台北 OR 台積電")
     tech_news = get_news("generative AI OR semiconductor OR green energy")
 
+    # 2. 生成分析
     print("⏳ 正在交由 Gemini 分析與整理...")
     insights_text = generate_insights(weather_data, global_news, local_news, tech_news)
 
+    # 3. 推播文字
     print("⏳ 正在推播 LINE 文字訊息 (Flex Message)...")
     send_line_flex_message(insights_text)
 
+    # 4. 生成語音
     print("⏳ 正在生成早晨語音播報...")
     audio_path, duration_ms = generate_audio(insights_text)
 
+    # 5. 雲端備份與語音推播
     if audio_path:
         print("⏳ 準備備份音檔至雲端硬碟...")
         audio_url = upload_audio_to_drive(audio_path)
@@ -267,7 +286,7 @@ def main():
             print("⏳ 正在推播 LINE 語音訊息...")
             send_line_audio_message(audio_url, duration_ms)
 
-    print("任務完成！")
+    print("🏁 任務完成！")
 
 if __name__ == "__main__":
     main()
