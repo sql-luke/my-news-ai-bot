@@ -1,13 +1,15 @@
 import os
 import time
+import asyncio
 import requests
 from datetime import datetime, timezone, timedelta
-from gtts import gTTS
 from mutagen.mp3 import MP3
+
+# V4.0：導入微軟 Edge TTS 套件
+import edge_tts
 
 from google import genai
 from google.genai import types
-
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -24,6 +26,22 @@ GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID")
 GDRIVE_CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID")
 GDRIVE_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET")
 GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN")
+
+# ==========================================
+# V4.0 語音設定控制面板
+# ==========================================
+# 性別選項：
+# 男聲沉穩： "zh-TW-YunJheNeural"  (允哲)
+# 女聲清脆： "zh-TW-HsiaoChenNeural" (曉臻)
+# 女聲溫柔： "zh-TW-HsiaoYuNeural"   (曉雨)
+TTS_VOICE = "zh-TW-YunJheNeural"
+
+# 語速微調：
+# "+0%" 為正常速度
+# "+10%" 為加快 10%，"-15%" 為放慢 15%，可自由輸入數值
+TTS_RATE = "+10%" 
+
+# ==========================================
 
 try:
     if GEMINI_API_KEY:
@@ -105,7 +123,6 @@ def generate_insights(weather_data, global_news, local_news, tech_news):
     - 每則新聞後方，請加入一段「**總結：**」（包含冒號），提供精闢的短評。
     """
     
-    # 升級為 2026 最新穩定版模型
     models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-flash-preview"]
     last_error = ""
     for model_name in models:
@@ -127,18 +144,23 @@ def generate_insights(weather_data, global_news, local_news, tech_news):
                 else:
                     break
     
-    # 【關鍵修改】直接把錯誤原因傳到您的 LINE 裡面！
     return f"抱歉，今日無法產生新聞洞察報告。\n(系統除錯資訊：{last_error})"
+
+# V4.0：非同步語音生成函數 (Edge TTS 專用)
+async def _async_generate_audio(text, audio_path):
+    communicate = edge_tts.Communicate(text, TTS_VOICE, rate=TTS_RATE)
+    await communicate.save(audio_path)
 
 def generate_audio(full_news_text):
     audio_path = "morning_news.mp3"
     clean_text = full_news_text.replace("**", "").replace("#", "").replace("---", "。")
     try:
-        tts = gTTS(text=clean_text, lang='zh-TW', slow=False)
-        tts.save(audio_path)
+        # 使用 asyncio 執行非同步任務
+        asyncio.run(_async_generate_audio(clean_text, audio_path))
+        
         audio_info = MP3(audio_path)
         duration_ms = int(audio_info.info.length * 1000)
-        print(f"✅ 語音檔案已產出，長度為 {duration_ms} 毫秒")
+        print(f"✅ 語音檔案已產出 (採用 {TTS_VOICE})，長度為 {duration_ms} 毫秒")
         return audio_path, duration_ms
     except Exception as e:
          print(f"❌ 生成語音失敗: {e}")
