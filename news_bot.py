@@ -312,9 +312,9 @@ def main():
     send_line_flex_message(insights_text, audio_url)
 
     # 保留原本的 LINE 原生語音，提供多種播放選擇
-    if audio_url:
-        print("⏳ 正在推播 LINE 語音訊息...")
-        send_line_audio_message(audio_url, duration_ms)
+    # if audio_url:
+    #    print("⏳ 正在推播 LINE 語音訊息...")
+    #    send_line_audio_message(audio_url, duration_ms)
 
     print("🏁 任務完成！")
 
