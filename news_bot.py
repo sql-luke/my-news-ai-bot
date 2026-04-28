@@ -27,12 +27,10 @@ GDRIVE_CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET")
 GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN")
 
 # ==========================================
-# V4.0 語音設定控制面板
+# 語音設定控制面板
 # ==========================================
 TTS_VOICE = "zh-TW-YunJheNeural"
 TTS_RATE = "+10%" 
-
-# ==========================================
 
 try:
     if GEMINI_API_KEY:
@@ -87,31 +85,26 @@ def get_news(query, language="zh"):
         print(f"Error fetching news for '{query}': {e}")
         return "無法取得新聞"
 
-def generate_insights(weather_data, global_news, local_news, tech_news):
+def generate_insights(weather_data, world_news, finance_news, tech_news, life_news):
     if not gemini_client:
         return "抱歉，Gemini 客戶端未正確初始化，請檢查金鑰。"
 
     prompt = f"""
-    你現在是一位專業、具備前瞻視野的 AI 新聞主播。
-    請根據以下資訊，整理出一份條理分明、具備深度洞察的晨間新聞播報稿。
-    請使用繁體中文，語氣需自信、客觀且具備啟發性。
+    你現在是一位充滿活力、聲音親切的晨間廣播節目主持人。
+    請將以下資訊，製作成一份長度適中、富有節奏感的「早晨廣播節目文字稿」。
+    
+    【節目流程與素材】
+    1. 🌤️ 氣象站：{weather_data}
+    2. 🌍 國際台：{world_news}
+    3. 💰 財經台：{finance_news}
+    4. 🔬 科技台：{tech_news}
+    5. 🍿 生活台：{life_news}
 
-    【今日高雄氣象】
-    {weather_data}
-
-    【全球焦點】
-    {global_news}
-
-    【國內時事】
-    {local_news}
-
-    【科技 AI 前沿】
-    {tech_news}
-
-    【排版要求】
-    - 使用 Markdown 格式。
-    - 每個段落請使用 `#` 或 `**` 標示大標題或重點。
-    - 每則新聞後方，請加入一段「**總結：**」（包含冒號），提供精闢的短評。
+    【播報要求】
+    - 使用 Markdown 格式排版，每個頻道必須以 `# 【頻道名稱】` 作為大標題。
+    - 每個頻道開場請設計一句生動的過場口白（例如：「緊接著帶您關心...」、「放鬆一下，來聽聽今天的娛樂焦點...」）。
+    - 新聞內容請用「口語化、說故事」的方式呈現，不要死板地條列。
+    - 節目最後，請以主持人的身分，送給聽眾一句激勵人心的「今日金句」（中英對照），並做溫暖的道別。
     """
     
     models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-flash-preview"]
@@ -213,14 +206,12 @@ def send_line_flex_message(insights_text, audio_url=None):
         else:
             flex_contents.append({"type": "text", "text": line, "color": "#F5F5DC", "wrap": True})
 
-    # 建構基礎的氣泡框
     bubble = {
         "type": "bubble",
         "styles": {"body": {"backgroundColor": "#121212"}},
         "body": {"type": "box", "layout": "vertical", "contents": flex_contents}
     }
 
-    # 如果有成功取得音檔網址，就在卡片最下方加入背景播放按鈕
     if audio_url:
         bubble["footer"] = {
             "type": "box",
@@ -246,7 +237,7 @@ def send_line_flex_message(insights_text, audio_url=None):
         "messages": [
             {
                 "type": "flex",
-                "altText": "您的晨間 AI 情報已送達！",
+                "altText": "您的晨間 AI 廣播已送達！",
                 "contents": bubble
             }
         ]
@@ -259,46 +250,20 @@ def send_line_flex_message(insights_text, audio_url=None):
     except Exception as e:
         print(f"❌ LINE 文字訊息推播失敗: {e}")
 
-def send_line_audio_message(audio_url, duration_ms):
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
-    }
-
-    payload = {
-        "to": LINE_USER_ID,
-        "messages": [
-            {
-                "type": "audio",
-                "originalContentUrl": audio_url,
-                "duration": duration_ms
-            }
-        ]
-    }
-    
-    try:
-        res = requests.post(url, headers=headers, json=payload)
-        res.raise_for_status()
-        print("✅ LINE 語音訊息推播成功！🎧")
-    except Exception as e:
-        print(f"❌ LINE 語音訊息推播失敗: {e}")
-
-# ==========================================
-# 主程式執行流程 (調整了執行順序)
-# ==========================================
 def main():
-    print(f"啟動晨間新聞播報任務... ({datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')})")
-    print("⏳ 正在取得新聞與天氣情報...")
+    print(f"啟動晨間廣播播報任務... ({datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')})")
+    
+    # 擴充為 5 個頻道的情報蒐集
+    print("⏳ 正在取得各頻道情報...")
     weather_data = get_kaohsiung_weather()
-    global_news = get_news("global economy OR geopolitics")
-    local_news = get_news("台灣 OR 台北 OR 台積電")
-    tech_news = get_news("generative AI OR semiconductor OR green energy")
+    world_news = get_news("國際新聞 OR global news")
+    finance_news = get_news("股市 OR 經濟 OR finance")
+    tech_news = get_news("AI OR 科技 OR apple OR 台積電")
+    life_news = get_news("電影 OR 健康 OR 旅遊 OR 娛樂", language="zh")
 
-    print("⏳ 正在交由 Gemini 分析與整理...")
-    insights_text = generate_insights(weather_data, global_news, local_news, tech_news)
+    print("⏳ 正在交由 Gemini 分析與撰寫節目稿...")
+    insights_text = generate_insights(weather_data, world_news, finance_news, tech_news, life_news)
 
-    # 先生成音檔並上傳，取得網址
     print("⏳ 正在生成早晨語音播報...")
     audio_path, duration_ms = generate_audio(insights_text)
 
@@ -307,14 +272,10 @@ def main():
         print("⏳ 準備備份音檔至雲端硬碟...")
         audio_url = upload_audio_to_drive(audio_path)
     
-    # 將音檔網址一起傳入圖文卡片，生成背景播放按鈕
     print("⏳ 正在推播 LINE 文字訊息 (Flex Message)...")
     send_line_flex_message(insights_text, audio_url)
-
-    # 保留原本的 LINE 原生語音，提供多種播放選擇
-    # if audio_url:
-    #    print("⏳ 正在推播 LINE 語音訊息...")
-    #    send_line_audio_message(audio_url, duration_ms)
+    
+    # 註：已依要求移除原生語音推播 (紅框處)
 
     print("🏁 任務完成！")
 
