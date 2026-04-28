@@ -5,7 +5,6 @@ import requests
 from datetime import datetime, timezone, timedelta
 from mutagen.mp3 import MP3
 
-# V4.0：導入微軟 Edge TTS 套件
 import edge_tts
 
 from google import genai
@@ -30,16 +29,8 @@ GDRIVE_REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN")
 # ==========================================
 # V4.0 語音設定控制面板
 # ==========================================
-# 性別選項：
-# 男聲沉穩： "zh-TW-YunJheNeural"  (允哲)
-# 女聲清脆： "zh-TW-HsiaoChenNeural" (曉臻)
-# 女聲溫柔： "zh-TW-HsiaoYuNeural"   (曉雨)
 TTS_VOICE = "zh-TW-YunJheNeural"
-
-# 語速微調：
-# "+0%" 為正常速度
-# "+10%" 為加快 10%，"-15%" 為放慢 15%，可自由輸入數值
-TTS_RATE = "+0%" 
+TTS_RATE = "+10%" 
 
 # ==========================================
 
@@ -146,7 +137,6 @@ def generate_insights(weather_data, global_news, local_news, tech_news):
     
     return f"抱歉，今日無法產生新聞洞察報告。\n(系統除錯資訊：{last_error})"
 
-# V4.0：非同步語音生成函數 (Edge TTS 專用)
 async def _async_generate_audio(text, audio_path):
     communicate = edge_tts.Communicate(text, TTS_VOICE, rate=TTS_RATE)
     await communicate.save(audio_path)
@@ -155,9 +145,7 @@ def generate_audio(full_news_text):
     audio_path = "morning_news.mp3"
     clean_text = full_news_text.replace("**", "").replace("#", "").replace("---", "。")
     try:
-        # 使用 asyncio 執行非同步任務
         asyncio.run(_async_generate_audio(clean_text, audio_path))
-        
         audio_info = MP3(audio_path)
         duration_ms = int(audio_info.info.length * 1000)
         print(f"✅ 語音檔案已產出 (採用 {TTS_VOICE})，長度為 {duration_ms} 毫秒")
@@ -205,7 +193,7 @@ def upload_audio_to_drive(file_path):
         print(f"❌ 上傳至 Google Drive 失敗: {e}")
         return None
 
-def send_line_flex_message(insights_text):
+def send_line_flex_message(insights_text, audio_url=None):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
         "Content-Type": "application/json",
@@ -225,17 +213,41 @@ def send_line_flex_message(insights_text):
         else:
             flex_contents.append({"type": "text", "text": line, "color": "#F5F5DC", "wrap": True})
 
+    # 建構基礎的氣泡框
+    bubble = {
+        "type": "bubble",
+        "styles": {"body": {"backgroundColor": "#121212"}},
+        "body": {"type": "box", "layout": "vertical", "contents": flex_contents}
+    }
+
+    # 如果有成功取得音檔網址，就在卡片最下方加入背景播放按鈕
+    if audio_url:
+        bubble["footer"] = {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "color": "#1DB100",
+                    "margin": "md",
+                    "action": {
+                        "type": "uri",
+                        "label": "🎧 啟用背景播放 (可關螢幕)",
+                        "uri": audio_url
+                    }
+                }
+            ]
+        }
+        bubble["styles"]["footer"] = {"backgroundColor": "#121212"}
+
     payload = {
         "to": LINE_USER_ID,
         "messages": [
             {
                 "type": "flex",
                 "altText": "您的晨間 AI 情報已送達！",
-                "contents": {
-                    "type": "bubble",
-                    "styles": {"body": {"backgroundColor": "#121212"}},
-                    "body": {"type": "box", "layout": "vertical", "contents": flex_contents}
-                }
+                "contents": bubble
             }
         ]
     }
@@ -272,6 +284,9 @@ def send_line_audio_message(audio_url, duration_ms):
     except Exception as e:
         print(f"❌ LINE 語音訊息推播失敗: {e}")
 
+# ==========================================
+# 主程式執行流程 (調整了執行順序)
+# ==========================================
 def main():
     print(f"啟動晨間新聞播報任務... ({datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')})")
     print("⏳ 正在取得新聞與天氣情報...")
@@ -283,19 +298,23 @@ def main():
     print("⏳ 正在交由 Gemini 分析與整理...")
     insights_text = generate_insights(weather_data, global_news, local_news, tech_news)
 
-    print("⏳ 正在推播 LINE 文字訊息 (Flex Message)...")
-    send_line_flex_message(insights_text)
-
+    # 先生成音檔並上傳，取得網址
     print("⏳ 正在生成早晨語音播報...")
     audio_path, duration_ms = generate_audio(insights_text)
 
+    audio_url = None
     if audio_path:
         print("⏳ 準備備份音檔至雲端硬碟...")
         audio_url = upload_audio_to_drive(audio_path)
-        
-        if audio_url:
-            print("⏳ 正在推播 LINE 語音訊息...")
-            send_line_audio_message(audio_url, duration_ms)
+    
+    # 將音檔網址一起傳入圖文卡片，生成背景播放按鈕
+    print("⏳ 正在推播 LINE 文字訊息 (Flex Message)...")
+    send_line_flex_message(insights_text, audio_url)
+
+    # 保留原本的 LINE 原生語音，提供多種播放選擇
+    if audio_url:
+        print("⏳ 正在推播 LINE 語音訊息...")
+        send_line_audio_message(audio_url, duration_ms)
 
     print("🏁 任務完成！")
 
