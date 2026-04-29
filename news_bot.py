@@ -11,96 +11,83 @@ import google.generativeai as genai
 # ==========================================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LINE_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-LINE_USER_ID = os.getenv("LINE_USER_ID")
+# LINE_USER_ID 現在可以支援多個，請在 Secrets 用逗號分隔，例如: U123...,U456...
+LINE_USER_IDS = os.getenv("LINE_USER_ID", "").split(",") 
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 GDRIVE_CLIENT_ID = os.getenv("GDRIVE_CLIENT_ID")
 GDRIVE_CLIENT_SECRET = os.getenv("GDRIVE_CLIENT_SECRET")
 GDRIVE_REFRESH_TOKEN = os.getenv("GDRIVE_REFRESH_TOKEN")
 
-# API 金鑰檢查
 if not GEMINI_API_KEY:
-    print("❌ 嚴重錯誤：找不到 GEMINI_API_KEY！請確認 GitHub Secrets 已設定且名稱拼寫正確。")
+    print("❌ 嚴重錯誤：找不到 GEMINI_API_KEY")
     exit(1)
 
-# 設定 Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 
-# 語音角色設定 (Edge TTS 台灣口音)
+# 【自定義人聲清單】你可以隨時更換這裡的字串
 VOICES = {
-    "HostA": "zh-TW-HsiaoChenNeural", # 女聲 (主 Key)
-    "HostB": "zh-TW-YunJheNeural"     # 男聲 (搭檔)
+    "HostA": "zh-TW-HsiaoChenNeural", # 台灣女聲
+    "HostB": "zh-TW-YunJheNeural"      # 台灣男聲
 }
 
 # ==========================================
-# 2. 核心功能：雙人劇本生成 (動態模型偵測版)
+# 2. 核心功能：雙人劇本生成 (NotebookLM 優化版)
 # ==========================================
 def generate_podcast_script(news_summary):
+    # 這裡的 Prompt 是讓對話變順的關鍵
     prompt = f"""
-    你現在是專業 Podcast 製作人。請根據以下新聞內容，寫一段兩人對話的 Podcast 劇本。
-    - HostA (女)：主持人，節奏輕快、負責開場與主要播報。
-    - HostB (男)：搭檔，負責提問、補充有趣點、或表達驚訝。
-    請確保對話生動，像是在聊天而不是唸稿。
+    你現在是專業的 AI Podcast 製作人，風格模仿 NotebookLM。
+    請根據以下新聞內容，寫一段 HostA (女) 與 HostB (男) 的深度聊天劇本。
     
-    輸出格式：純 JSON 陣列，不要有任何 Markdown 標記或說明文字。
+    製作要求：
+    1. 非常口語化：多使用「嗯...」、「對啊」、「其實」、「你知道嗎？」、「我跟你說喔」。
+    2. 反應式對話：當 HostA 講完一個新聞點，HostB 不要直接講下一個，要先給予短回應（如：真的假的小心點、這影響很大耶）。
+    3. 節奏感：每句話不要太長，像真實聊天一樣有來有往。
+    4. 禁止唸稿感：不要說「以下是今天的財經新聞」，要說「喔對了，說到錢，你有看今天的股市嗎？」。
+    
+    輸出格式：純 JSON 陣列，不要有任何 Markdown 標記。
     範例：[
-      {{"speaker": "HostA", "text": "各位聽眾朋友大家好，我是 HostA！"}},
-      {{"speaker": "HostB", "text": "大家好，我是 HostB！今天的新聞很有趣喔！"}}
+      {{"speaker": "HostA", "text": "欸，你有看到明天的天氣嗎？會變超冷的。"}},
+      {{"speaker": "HostB", "text": "喔？真的嗎？我才正打算明天去海邊耶。"}},
+      {{"speaker": "HostA", "text": "那我看你還是待在家喝咖啡好了，北部會下探12度喔。"}},
+      {{"speaker": "HostB", "text": "哇...那真的差很多耶，看來毛衣要拿出來了。"}},
     ]
     
-    今日新聞內容：
-    {news_summary}
+    內容：{news_summary}
     """
     
-    print("🔍 正在向伺服器查詢您的 API Key 支援哪些模型...")
+    print("🔍 查詢可用模型...")
     available_models = []
     try:
-        # 動態抓取支援 generateContent 的模型清單
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                clean_name = m.name.replace('models/', '')
-                available_models.append(clean_name)
+                available_models.append(m.name.replace('models/', ''))
     except Exception as e:
-        raise Exception(f"❌ 查詢模型清單失敗，可能是 API Key 無效或網路問題: {e}")
+        print(f"查詢失敗: {e}")
 
-    if not available_models:
-        raise Exception("❌ 您的 API Key 沒有任何支援生成文字的模型。")
-
-    # 偏好順序：越前面的越聰明/速度越快
-    preferred_models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
-    
-    # 從您可用的模型中，挑出順位最高的一個
-    selected_model = next((model for model in preferred_models if model in available_models), None)
-    
-    if not selected_model:
-        selected_model = available_models[0]
-
-    print(f"🚀 最終決定使用模型: {selected_model}")
+    preferred = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    selected = next((m for m in preferred if m in available_models), available_models[0])
+    print(f"🚀 使用模型: {selected}")
     
     try:
-        model = genai.GenerativeModel(selected_model)
+        model = genai.GenerativeModel(selected)
         response = model.generate_content(prompt)
         
-        # 【防彈版 JSON 清理邏輯】
-        # 使用 ASCII 碼組合反勾號，徹底避免複製程式碼時的字串截斷錯誤
+        # 清理 JSON
         content = response.text.strip()
         triple_backticks = chr(96) * 3 
-        
-        content = content.replace(triple_backticks + "json", "")
-        content = content.replace(triple_backticks, "")
-        content = content.strip()
+        content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
             
         return json.loads(content)
-        
     except Exception as e:
-        raise Exception(f"使用模型 {selected_model} 執行或解析失敗: {e}")
+        raise Exception(f"生成劇本失敗: {e}")
 
 # ==========================================
-# 3. 核心功能：語音生成與拼接
+# 3. 核心功能：語音生成與拼接 (增加動態停頓)
 # ==========================================
 async def generate_audio(script, output_file):
-    print("🎙️ 正在逐句生成語音並進行無縫拼接...")
+    print("🎙️ 正在生成語音並進行 NotebookLM 風格拼接...")
     final_audio = AudioSegment.empty()
-    pause = AudioSegment.silent(duration=400) # 對話間隔 0.4 秒的呼吸停頓
     
     for i, line in enumerate(script):
         text = line.get('text', '')
@@ -108,16 +95,18 @@ async def generate_audio(script, output_file):
         voice = VOICES.get(speaker, VOICES["HostA"])
         temp_name = f"segment_{i}.mp3"
         
-        # 產生單句語音
         communicate = edge_tts.Communicate(text, voice)
         await communicate.save(temp_name)
         
-        # 使用 pydub 拼接
         segment = AudioSegment.from_mp3(temp_name)
+        
+        # 動態調整停頓：如果是 HostB 在回應，停頓縮短一點會更自然
+        pause_duration = 300 if speaker == "HostB" else 500
+        pause = AudioSegment.silent(duration=pause_duration)
+        
         final_audio += segment + pause
-        os.remove(temp_name) # 用完即刪除暫存檔
+        os.remove(temp_name)
     
-    # 匯出最終檔案
     final_audio.export(output_file, format="mp3", bitrate="128k")
     return output_file
 
@@ -126,8 +115,6 @@ async def generate_audio(script, output_file):
 # ==========================================
 def upload_to_gdrive(file_path):
     print("📡 正在上傳至 Google Drive...")
-    
-    # A. 透過 Refresh Token 換取臨時 Access Token
     token_url = "https://oauth2.googleapis.com/token"
     token_data = {
         "client_id": GDRIVE_CLIENT_ID,
@@ -136,10 +123,9 @@ def upload_to_gdrive(file_path):
         "grant_type": "refresh_token",
     }
     r = requests.post(token_url, data=token_data)
-    r.raise_for_status() # 確保請求成功
+    r.raise_for_status()
     access_token = r.json().get("access_token")
 
-    # B. 上傳檔案
     metadata = {
         "name": os.path.basename(file_path),
         "parents": [GDRIVE_FOLDER_ID]
@@ -154,55 +140,61 @@ def upload_to_gdrive(file_path):
     res.raise_for_status()
     file_id = res.json().get("id")
 
-    # C. 設定權限為公開讀取並取得連結
     perm_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
     requests.post(perm_url, headers=headers, json={"role": "reader", "type": "anyone"})
     
-    # 回傳直接下載連結格式
     return f"https://docs.google.com/uc?export=download&id={file_id}"
 
 # ==========================================
-# 5. API 實作：LINE Flex Message 推播
+# 5. API 實作：LINE Flex Message (支援多人發送)
 # ==========================================
 def send_line_podcast(audio_url):
-    print("💬 正在發送 LINE 訊息...")
+    print(f"💬 正在向 {len(LINE_USER_IDS)} 位使用者發送 LINE 訊息...")
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
     }
-    payload = {
-        "to": LINE_USER_ID,
-        "messages": [{
-            "type": "flex",
-            "altText": "您的雙聲道新聞 Podcast 已送到！",
-            "contents": {
-                "type": "bubble",
-                "body": {
-                    "type": "box",
-                    "layout": "vertical",
-                    "contents": [
-                        {"type": "text", "text": "🎙️ 今日雙人 Podcast 新聞", "weight": "bold", "size": "xl", "wrap": True},
-                        {"type": "text", "text": "Gemini & Edge TTS 聯合製作", "size": "xs", "color": "#aaaaaa", "margin": "sm"},
-                        {
-                            "type": "button",
-                            "action": {
-                                "type": "uri",
-                                "label": "▶️ 立即點擊播放",
-                                "uri": audio_url
-                            },
-                            "style": "primary",
-                            "color": "#1DB446",
-                            "margin": "xl"
-                        }
-                    ]
-                }
-            }
-        }]
-    }
     
-    line_url = "https://api.line.me/v2/bot/message/push"
-    res = requests.post(line_url, headers=headers, json=payload)
-    res.raise_for_status()
+    for user_id in LINE_USER_IDS:
+        user_id = user_id.strip()
+        if not user_id: continue
+        
+        payload = {
+            "to": user_id,
+            "messages": [{
+                "type": "flex",
+                "altText": "雙聲道 Podcast 已經準備好囉！",
+                "contents": {
+                    "type": "bubble",
+                    "body": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "contents": [
+                            {"type": "text", "text": "🎙️ AI 雙人晨間新聞", "weight": "bold", "size": "xl"},
+                            {"type": "text", "text": "更自然的口語對話版本", "size": "xs", "color": "#aaaaaa", "margin": "sm"},
+                            {
+                                "type": "button",
+                                "action": {
+                                    "type": "uri",
+                                    "label": "▶️ 播放今日對話",
+                                    "uri": audio_url
+                                },
+                                "style": "primary",
+                                "color": "#1DB446",
+                                "margin": "xl"
+                            }
+                        ]
+                    }
+                }
+            }]
+        }
+        try:
+            line_url = "https://api.line.me/v2/bot/message/push"
+            res = requests.post(line_url, headers=headers, json=payload)
+            res.raise_for_status()
+            print(f"✅ 已成功傳送給: {user_id[:8]}...")
+        except Exception as e:
+            print(f"❌ 傳送給 {user_id} 失敗: {e}")
 
 # ==========================================
 # 主程式
@@ -217,29 +209,18 @@ def main():
     """
     
     try:
-        print("🚀 開始執行 AI Podcast 任務...")
-        
-        print("\n--- 步驟 1：生成雙人對話劇本 ---")
+        print("🚀 開始執行升級版 AI Podcast 任務...")
         script = generate_podcast_script(news_content)
-        print("✅ 劇本生成完畢！")
         
-        print("\n--- 步驟 2：製作音檔 ---")
         output_file = "daily_news_podcast.mp3"
         asyncio.run(generate_audio(script, output_file))
-        print("✅ 音檔製作完畢！")
         
-        print("\n--- 步驟 3：上傳雲端 ---")
         audio_link = upload_to_gdrive(output_file)
-        print(f"✅ 上傳成功，音檔連結：{audio_link}")
-        
-        print("\n--- 步驟 4：發送 LINE 訊息 ---")
         send_line_podcast(audio_link)
-        print("✅ LINE 推播發送成功！")
         
-        print("\n🎉 任務全數順利完成！")
-        
+        print("🎉 全部優化任務已完成！")
     except Exception as e:
-        print(f"\n❌ 程式執行過程中發生錯誤: {e}")
+        print(f"\n❌ 錯誤: {e}")
 
 if __name__ == "__main__":
     main()
