@@ -85,6 +85,7 @@ def generate_podcast_script(news_summary):
     1. 絕對口語化：多用「沒錯」、「對呀」、「你知道嗎」、「哇塞」、「說到這個」。
     2. 反應式對話：一人講完重要資訊，另一人要給予簡短的情緒反應，不要像機器人念稿。
     3. 順暢過渡：單元之間切換要自然（例如：「聊完嚴肅的國際新聞，我們來看看輕鬆的娛樂圈...」）。
+    4. 避免純符號：台詞中盡量避免只出現表情符號，一定要有文字，以免語音生成失敗。
     
     輸出格式：純 JSON 陣列，不要有任何 Markdown 標記或說明文字。
     
@@ -101,7 +102,7 @@ def generate_podcast_script(news_summary):
     except Exception as e:
         print(f"查詢失敗: {e}")
 
-    preferred = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro']
+    preferred = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-pro']
     selected = next((m for m in preferred if m in available_models), available_models[0])
     print(f"🚀 使用模型: {selected}")
     
@@ -118,30 +119,50 @@ def generate_podcast_script(news_summary):
         raise Exception(f"生成劇本失敗: {e}")
 
 # ==========================================
-# 4. 核心功能：語音生成與拼接
+# 4. 核心功能：語音生成與拼接 (增強防錯機制)
 # ==========================================
 async def generate_audio(script, output_file):
     print("🎙️ 正在生成語音並進行無縫拼接...")
     final_audio = AudioSegment.empty()
     
     for i, line in enumerate(script):
-        text = line.get('text', '')
+        text = line.get('text', '').strip()
         speaker = line.get('speaker', 'HostA')
         voice = VOICES.get(speaker, VOICES["HostA"])
         temp_name = f"segment_{i}.mp3"
         
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(temp_name)
-        
-        segment = AudioSegment.from_mp3(temp_name)
-        pause_duration = 300 if speaker == "HostB" else 450
-        pause = AudioSegment.silent(duration=pause_duration)
-        
-        final_audio += segment + pause
-        os.remove(temp_name)
+        # 1. 如果台詞是空的，直接跳過，避免報錯
+        if not text:
+            continue
+            
+        try:
+            # 產生單句語音
+            communicate = edge_tts.Communicate(text, voice)
+            await communicate.save(temp_name)
+            
+            # 2. 檢查檔案是否真的存在且大於 0 byte (過濾掉純 Emoji 或無效字元的狀況)
+            if os.path.exists(temp_name) and os.path.getsize(temp_name) > 0:
+                segment = AudioSegment.from_mp3(temp_name)
+                pause_duration = 300 if speaker == "HostB" else 450
+                pause = AudioSegment.silent(duration=pause_duration)
+                
+                final_audio += segment + pause
+            else:
+                print(f"⚠️ 警告: 段落 {i} 無法產生有效語音，已自動跳過 (文字內容: {text})")
+                
+        except Exception as e:
+            print(f"⚠️ 警告: 處理段落 {i} 時發生錯誤，已自動跳過: {e}")
+        finally:
+            # 確保暫存檔一定會被清理，保持環境乾淨
+            if os.path.exists(temp_name):
+                os.path.remove(temp_name)
     
-    final_audio.export(output_file, format="mp3", bitrate="128k")
-    return output_file
+    # 確保最終有成功合併的音檔才匯出
+    if len(final_audio) > 0:
+        final_audio.export(output_file, format="mp3", bitrate="128k")
+        return output_file
+    else:
+        raise Exception("所有語音段落皆生成失敗，無法產出 MP3。")
 
 # ==========================================
 # 5. API 實作：Google Drive 上傳
