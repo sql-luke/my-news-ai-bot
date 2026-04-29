@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import requests
+import xml.etree.ElementTree as ET
 import edge_tts
 from pydub import AudioSegment
 import google.generativeai as genai
@@ -11,7 +12,6 @@ import google.generativeai as genai
 # ==========================================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LINE_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-# ⚠️ 注意：已經移除 LINE_USER_ID，因為我們改用全體群發廣播！
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 GDRIVE_CLIENT_ID = os.getenv("GDRIVE_CLIENT_ID")
 GDRIVE_CLIENT_SECRET = os.getenv("GDRIVE_CLIENT_SECRET")
@@ -24,36 +24,71 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 VOICES = {
-    "HostA": "zh-TW-HsiaoChenNeural", # 女聲
-    "HostB": "zh-TW-YunJheNeural"     # 男聲
+    "HostA": "zh-TW-HsiaoChenNeural", # 女聲 (主導播報)
+    "HostB": "zh-TW-YunJheNeural"     # 男聲 (搭檔互動)
 }
 
 # ==========================================
-# 2. 核心功能：雙人劇本生成 (頭條加強版)
+# 2. 自動抓取 Google 即時新聞 (精準分類版)
+# ==========================================
+def fetch_real_time_news():
+    print("📰 正在為「晨間廣播節目表」抓取各分類即時資訊...")
+    
+    def get_news_from_rss(url, limit=2):
+        try:
+            res = requests.get(url)
+            res.raise_for_status()
+            root = ET.fromstring(res.content)
+            items = root.findall('.//item')
+            news_list = []
+            for item in items[:limit]:
+                title = item.find('title').text
+                news_list.append(f"- {title}")
+            return "\n".join(news_list)
+        except Exception as e:
+            return f"無法抓取此分類: {e}"
+
+    # 針對六大單元設計的 RSS 來源
+    weather_url = "https://news.google.com/rss/search?q=%E5%8F%B0%E7%81%A3+%E5%A4%A9%E6%B0%A3+%E6%BA%AB%E5%BA%A6&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    world_url = "https://news.google.com/rss/headlines/section/topic/WORLD?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    finance_url = "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    tech_url = "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    ent_url = "https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+
+    final_content = f"""
+    🌤️【氣象情報】：\n{get_news_from_rss(weather_url, 2)}
+    🌍【國際頭條】：\n{get_news_from_rss(world_url, 2)}
+    💰【財經市場】：\n{get_news_from_rss(finance_url, 2)}
+    🔬【科技酷報】：\n{get_news_from_rss(tech_url, 2)}
+    🍿【生活娛樂】：\n{get_news_from_rss(ent_url, 2)}
+    """
+    print("✅ 節目素材抓取完成！內容如下：\n", final_content)
+    return final_content
+
+# ==========================================
+# 3. 核心功能：雙人劇本生成 (六大單元導演版)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
-    你現在是專業的 AI Podcast 製作人，風格模仿 NotebookLM。
-    請根據以下新聞內容，寫一段 HostA (女) 與 HostB (男) 的深度聊天劇本。
+    你現在是頂級的 AI 晨間廣播節目製作人，風格模仿 NotebookLM，自然、生動、幽默。
+    請根據以下「即時新聞內容」，寫一段 HostA (女) 與 HostB (男) 的晨間廣播劇本。
     
-    【核心播報任務】
-    請務必在對話中，清晰且自然地帶出以下重點：
-    1. 3 則國際重大頭條新聞。
-    2. 3 則國內重大頭條新聞。
-    3. 其他生活、科技或氣象重點。
+    【廣播節目表流程】(請務必嚴格按照此順序播報，並自然過渡)：
+    1. 🌤️ 早安氣象站：HostA 開場問好，並根據氣象情報給出「今日穿搭與出門建議」。
+    2. 🌍 國際頭條雷達：兩人聊聊世界發生的大事。
+    3. 💰 財經與市場：帶出股市脈動或理財趨勢（HostB 可以發表一些小觀點）。
+    4. 🔬 科技酷報：分享 AI 新知或 3C 產品消息。
+    5. 🍿 生活與娛樂：輕鬆一下，聊聊影劇、生活或流行文化。
+    6. 📖 每日一句：節目尾聲，由其中一人送上一句激勵人心的名言（中英皆可），完美收尾。
     
-    【製作要求】
-    1. 非常口語化：多使用「嗯...」、「對啊」、「其實」、「你知道嗎？」、「我跟你說喔」。
-    2. 反應式對話：當 HostA 講完一個新聞點，HostB 不要直接講下一個，要先給予短回應。
-    3. 節奏感：每句話不要太長，像真實聊天一樣有來有往。
+    【對話要求】
+    1. 絕對口語化：多用「沒錯」、「對呀」、「你知道嗎」、「哇塞」、「說到這個」。
+    2. 反應式對話：一人講完重要資訊，另一人要給予簡短的情緒反應，不要像機器人念稿。
+    3. 順暢過渡：單元之間切換要自然（例如：「聊完嚴肅的國際新聞，我們來看看輕鬆的娛樂圈...」）。
     
     輸出格式：純 JSON 陣列，不要有任何 Markdown 標記或說明文字。
-    範例：[
-      {{"speaker": "HostA", "text": "各位聽眾早安！今天的國內外大事真的很多，首先來關心國際焦點..."}},
-      {{"speaker": "HostB", "text": "沒錯，第一件大事就跟我們息息相關..."}}
-    ]
     
-    今日新聞內容：
+    今日節目素材：
     {news_summary}
     """
     
@@ -83,7 +118,7 @@ def generate_podcast_script(news_summary):
         raise Exception(f"生成劇本失敗: {e}")
 
 # ==========================================
-# 3. 核心功能：語音生成與拼接
+# 4. 核心功能：語音生成與拼接
 # ==========================================
 async def generate_audio(script, output_file):
     print("🎙️ 正在生成語音並進行無縫拼接...")
@@ -99,8 +134,7 @@ async def generate_audio(script, output_file):
         await communicate.save(temp_name)
         
         segment = AudioSegment.from_mp3(temp_name)
-        
-        pause_duration = 300 if speaker == "HostB" else 500
+        pause_duration = 300 if speaker == "HostB" else 450
         pause = AudioSegment.silent(duration=pause_duration)
         
         final_audio += segment + pause
@@ -110,7 +144,7 @@ async def generate_audio(script, output_file):
     return output_file
 
 # ==========================================
-# 4. API 實作：Google Drive 上傳
+# 5. API 實作：Google Drive 上傳
 # ==========================================
 def upload_to_gdrive(file_path):
     print("📡 正在上傳至 Google Drive...")
@@ -145,33 +179,32 @@ def upload_to_gdrive(file_path):
     return f"https://docs.google.com/uc?export=download&id={file_id}"
 
 # ==========================================
-# 5. API 實作：LINE 廣播 (Broadcast)
+# 6. API 實作：LINE 廣播群發
 # ==========================================
 def send_line_podcast_broadcast(audio_url):
-    print("💬 正在向【所有好友】發送 LINE 群發訊息...")
+    print("💬 正在向所有好友發送 LINE 群發訊息...")
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
     }
     
-    # 群發 API 不需要指定 "to" 欄位，它會自動發給所有沒封鎖機器的的好友
     payload = {
         "messages": [{
             "type": "flex",
-            "altText": "雙聲道頭條新聞 Podcast 已送到！",
+            "altText": "您的晨間 AI 廣播節目已送到！",
             "contents": {
                 "type": "bubble",
                 "body": {
                     "type": "box",
                     "layout": "vertical",
                     "contents": [
-                        {"type": "text", "text": "🎙️ 今日國內外大事 Podcast", "weight": "bold", "size": "xl"},
-                        {"type": "text", "text": "為您整理 6 大國內外頭條", "size": "xs", "color": "#aaaaaa", "margin": "sm"},
+                        {"type": "text", "text": "📻 晨間 AI 廣播", "weight": "bold", "size": "xl"},
+                        {"type": "text", "text": "氣象/國際/財經/科技/娛樂/金句", "size": "xs", "color": "#aaaaaa", "margin": "sm"},
                         {
                             "type": "button",
                             "action": {
                                 "type": "uri",
-                                "label": "▶️ 立即收聽",
+                                "label": "▶️ 點擊收聽節目",
                                 "uri": audio_url
                             },
                             "style": "primary",
@@ -184,48 +217,31 @@ def send_line_podcast_broadcast(audio_url):
         }]
     }
     
-    # 改為呼叫 broadcast API 網址
     line_url = "https://api.line.me/v2/bot/message/broadcast"
     res = requests.post(line_url, headers=headers, json=payload)
     res.raise_for_status()
-    print("✅ 群發廣播成功！所有好友都收到了！")
+    print("✅ 群發廣播成功！")
 
 # ==========================================
 # 主程式
 # ==========================================
 def main():
-    # 這裡的模擬資料加入了國內外各三則的具體內容
-    # 未來如果你接上真正的爬蟲，只要把爬到的頭條塞進這個字串即可
-    news_content = """
-    【國際重大頭條】
-    1. 蘋果發布最新 AI 晶片，宣稱效能提升 30%，股價大漲。
-    2. 聯合國召開緊急氣候峰會，多國承諾提前達成淨零碳排。
-    3. 日本央行意外宣布升息，日圓急遽升值，震驚全球市場。
-
-    【國內重大頭條】
-    1. 立法院三讀通過居住正義法案，提高囤房稅率最高至 4.8%。
-    2. 台積電宣布將在南部科學園區擴建新廠，預計創造上萬就業機會。
-    3. 疾管署發布流感警報，單週就診人數突破 10 萬人次，呼籲盡速施打疫苗。
-
-    【科技與生活】
-    科技：OpenAI 推出全新語音模型，反應速度媲美真人對話。
-    氣象：強烈冷氣團明晚南下，北部低溫下探 12 度，全台有雨。
-    生活：最新醫學研究顯示，睡前滑手機超過半小時，深層睡眠時間減少 20%。
-    """
-    
     try:
-        print("🚀 開始執行 AI Podcast 任務...")
+        print("🚀 開始執行【晨間 AI 廣播節目】任務...")
+        
+        # 抓取包含氣象、財經、娛樂等專屬板塊的新聞
+        news_content = fetch_real_time_news()
+        
         script = generate_podcast_script(news_content)
         
-        output_file = "daily_news_podcast.mp3"
+        output_file = "morning_radio_podcast.mp3"
         asyncio.run(generate_audio(script, output_file))
         
         audio_link = upload_to_gdrive(output_file)
         
-        # 改為呼叫群發函數
         send_line_podcast_broadcast(audio_link)
         
-        print("🎉 全部優化任務已完成！")
+        print("🎉 節目製作與推播已完美達成！")
     except Exception as e:
         print(f"\n❌ 錯誤: {e}")
 
