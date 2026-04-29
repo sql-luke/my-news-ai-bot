@@ -26,8 +26,8 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 # 【自定義人聲清單】你可以隨時更換這裡的字串
 VOICES = {
-    "HostA": "zh-TW-HsiaoChenNeural", # 台灣女聲
-    "HostB": "zh-TW-YunJheNeural"      # 台灣男聲
+    "HostA": "zh-CN-XiaoxiaoNeural", # 大陸曉曉(女聲)
+    "HostB": "zh-CN-YunxiNeural"      # 大陸雲希(男聲)
 }
 
 # ==========================================
