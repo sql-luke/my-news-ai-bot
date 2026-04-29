@@ -1,4 +1,4 @@
-name: Run AI News Podcast Bot (Dual Speaker)
+name: Run AI News Bot V3 (Dual Speaker Podcast)
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
     - cron: '0 22 * * *'
   workflow_dispatch: # 保留這個，讓你可以隨時手動點擊按鈕測試
 
-# 加入這行來消除 Node.js 的相關警告
+# 加入這行來消除 Node.js 的黃色警告
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -23,21 +23,27 @@ jobs:
           python-version: '3.11'
 
       # ==========================================
-      # 重要：安裝系統級相依套件 FFmpeg (音檔拼接必備)
+      # 關鍵步驟 1：安裝 FFmpeg (pydub 音檔拼接必備)
       # ==========================================
       - name: Install FFmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Install dependencies (讀取 requirements.txt)
+      # ==========================================
+      # 關鍵步驟 2：讀取 requirements.txt 並強制升級核心套件
+      # ==========================================
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install --upgrade google-generativeai pydub edge-tts requests
 
+      # ==========================================
+      # 關鍵步驟 3：載入 Secrets 並執行主程式
+      # ==========================================
       - name: Execute Python Script
         env:
-          # 所有的 API Key 與 Secret 請確保已在 GitHub Repo Settings -> Secrets -> Actions 中設定
           NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
