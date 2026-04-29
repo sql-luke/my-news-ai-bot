@@ -17,6 +17,11 @@ GDRIVE_CLIENT_ID = os.getenv("GDRIVE_CLIENT_ID")
 GDRIVE_CLIENT_SECRET = os.getenv("GDRIVE_CLIENT_SECRET")
 GDRIVE_REFRESH_TOKEN = os.getenv("GDRIVE_REFRESH_TOKEN")
 
+# API 金鑰檢查
+if not GEMINI_API_KEY:
+    print("❌ 嚴重錯誤：找不到 GEMINI_API_KEY！請確認 GitHub Secrets 已設定且名稱拼寫正確。")
+    exit(1)
+
 # 設定 Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -27,7 +32,7 @@ VOICES = {
 }
 
 # ==========================================
-# 2. 核心功能：雙人劇本生成 (具備自動備援機制)
+# 2. 核心功能：雙人劇本生成 (動態模型偵測版)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
@@ -46,32 +51,53 @@ def generate_podcast_script(news_summary):
     {news_summary}
     """
     
-    # 依序嘗試目前最穩定與最新的模型名稱，防止 API 404 錯誤
-    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    print("🔍 正在向伺服器查詢您的 API Key 支援哪些模型...")
+    available_models = []
+    try:
+        # 動態抓取支援 generateContent 的模型清單
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                # 取得乾淨的模型名稱 (去掉 models/ 前綴)
+                clean_name = m.name.replace('models/', '')
+                available_models.append(clean_name)
+        
+        print(f"✅ 您的金鑰可用的模型清單有: {available_models}")
+        
+    except Exception as e:
+        raise Exception(f"❌ 查詢模型清單失敗，可能是 API Key 無效或網路問題: {e}")
+
+    if not available_models:
+        raise Exception("❌ 您的 API Key 沒有任何支援生成文字的模型。")
+
+    # 偏好順序：越前面的越聰明/速度越快
+    preferred_models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
     
-    for model_name in models_to_try:
-        try:
-            print(f"🔄 正在嘗試使用模型: {model_name}...")
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
+    # 從您可用的模型中，挑出順位最高的一個
+    selected_model = next((model for model in preferred_models if model in available_models), None)
+    
+    # 如果都沒有我們偏好的，就隨便抓清單裡的第一個備用
+    if not selected_model:
+        selected_model = available_models[0]
+
+    print(f"🚀 最終決定使用模型: {selected_model}")
+    
+    try:
+        model = genai.GenerativeModel(selected_model)
+        response = model.generate_content(prompt)
+        
+        # 清理格式以確保 JSON 能夠被正確解析
+        content = response.text.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
             
-            # 清理格式以確保 JSON 能夠被正確解析
-            content = response.text.strip()
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-                
-            return json.loads(content.strip())
-            
-        except Exception as e:
-            print(f"⚠️ 模型 {model_name} 發生錯誤: {e}")
-            continue # 失敗則嘗試下一個模型
-            
-    # 如果迴圈跑完還是失敗，拋出最終錯誤
-    raise Exception("❌ 所有設定的 Gemini 模型均無法呼叫，請確認 API 狀態或金鑰是否正確。")
+        return json.loads(content.strip())
+        
+    except Exception as e:
+        raise Exception(f"使用模型 {selected_model} 執行失敗: {e}")
 
 # ==========================================
 # 3. 核心功能：語音生成與拼接
@@ -132,7 +158,7 @@ def upload_to_gdrive(file_path):
     res.raise_for_status()
     file_id = res.json().get("id")
 
-    # C. 設定權限為公開讀取並取得連結 (LINE 必須能公開讀取才能播放)
+    # C. 設定權限為公開讀取並取得連結
     perm_url = f"[https://www.googleapis.com/drive/v3/files/](https://www.googleapis.com/drive/v3/files/){file_id}/permissions"
     requests.post(perm_url, headers=headers, json={"role": "reader", "type": "anyone"})
     
