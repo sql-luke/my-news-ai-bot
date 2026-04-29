@@ -57,7 +57,6 @@ def generate_podcast_script(news_summary):
         # 動態抓取支援 generateContent 的模型清單
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                # 取得乾淨的模型名稱 (去掉 models/ 前綴)
                 clean_name = m.name.replace('models/', '')
                 available_models.append(clean_name)
         
@@ -75,7 +74,6 @@ def generate_podcast_script(news_summary):
     # 從您可用的模型中，挑出順位最高的一個
     selected_model = next((model for model in preferred_models if model in available_models), None)
     
-    # 如果都沒有我們偏好的，就隨便抓清單裡的第一個備用
     if not selected_model:
         selected_model = available_models[0]
 
@@ -85,7 +83,6 @@ def generate_podcast_script(news_summary):
         model = genai.GenerativeModel(selected_model)
         response = model.generate_content(prompt)
         
-        # 清理格式以確保 JSON 能夠被正確解析
         content = response.text.strip()
         if content.startswith("```json"):
             content = content[7:]
@@ -120,7 +117,7 @@ async def generate_audio(script, output_file):
         # 使用 pydub 拼接
         segment = AudioSegment.from_mp3(temp_name)
         final_audio += segment + pause
-        os.remove(temp_name) # 用完即刪除暫存檔
+        os.remove(temp_name) 
     
     # 匯出最終檔案
     final_audio.export(output_file, format="mp3", bitrate="128k")
@@ -131,7 +128,8 @@ async def generate_audio(script, output_file):
 # ==========================================
 def upload_to_gdrive(file_path):
     print("📡 正在上傳至 Google Drive...")
-    # A. 透過 Refresh Token 換取臨時 Access Token
+    
+    # 這裡的網址已確保是純字串，沒有任何超連結干擾
     token_url = "[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)"
     token_data = {
         "client_id": GDRIVE_CLIENT_ID,
@@ -140,10 +138,9 @@ def upload_to_gdrive(file_path):
         "grant_type": "refresh_token",
     }
     r = requests.post(token_url, data=token_data)
-    r.raise_for_status() # 確保請求成功
+    r.raise_for_status()
     access_token = r.json().get("access_token")
 
-    # B. 上傳檔案
     metadata = {
         "name": os.path.basename(file_path),
         "parents": [GDRIVE_FOLDER_ID]
@@ -152,17 +149,16 @@ def upload_to_gdrive(file_path):
         'data': ('metadata', json.dumps(metadata), 'application/json'),
         'file': open(file_path, 'rb')
     }
+    
     upload_url = "[https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart](https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart)"
     headers = {"Authorization": f"Bearer {access_token}"}
     res = requests.post(upload_url, headers=headers, files=files)
     res.raise_for_status()
     file_id = res.json().get("id")
 
-    # C. 設定權限為公開讀取並取得連結
     perm_url = f"[https://www.googleapis.com/drive/v3/files/](https://www.googleapis.com/drive/v3/files/){file_id}/permissions"
     requests.post(perm_url, headers=headers, json={"role": "reader", "type": "anyone"})
     
-    # 回傳直接下載連結格式
     return f"[https://docs.google.com/uc?export=download&id=](https://docs.google.com/uc?export=download&id=){file_id}"
 
 # ==========================================
@@ -203,14 +199,15 @@ def send_line_podcast(audio_url):
             }
         }]
     }
-    res = requests.post("[https://api.line.me/v2/bot/message/push](https://api.line.me/v2/bot/message/push)", headers=headers, json=payload)
+    
+    line_url = "[https://api.line.me/v2/bot/message/push](https://api.line.me/v2/bot/message/push)"
+    res = requests.post(line_url, headers=headers, json=payload)
     res.raise_for_status()
 
 # ==========================================
 # 主程式
 # ==========================================
 def main():
-    # 這裡放你原本抓取新聞的邏輯 (這是一組測試資料，確認流程跑通後可換成你的爬蟲/API)
     news_content = """
     氣象：明天全台降溫，北部低溫下探 15 度。
     國際：美國聯準會宣布利率維持不變。
