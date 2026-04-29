@@ -44,7 +44,7 @@ def generate_podcast_script(news_summary):
     
     新聞內容：{news_summary}
     """
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-pro-latest')
     response = model.generate_content(prompt)
     content = response.text.replace('```json', '').replace('```', '').strip()
     return json.loads(content)
