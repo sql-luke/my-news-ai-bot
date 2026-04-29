@@ -29,14 +29,13 @@ VOICES = {
 }
 
 # ==========================================
-# 2. 自動抓取 Google 即時新聞 (加入 15 秒 Timeout)
+# 2. 自動抓取 Google 即時新聞
 # ==========================================
 def fetch_real_time_news():
     print("📰 正在為「晨間廣播節目表」抓取各分類即時資訊...")
     
     def get_news_from_rss(url, limit=2):
         try:
-            # 加上 timeout=15，避免卡死
             res = requests.get(url, timeout=15)
             res.raise_for_status()
             root = ET.fromstring(res.content)
@@ -66,7 +65,7 @@ def fetch_real_time_news():
     return final_content
 
 # ==========================================
-# 3. 核心功能：雙人劇本生成 (加入 API Timeout)
+# 3. 核心功能：雙人劇本生成 (升級版：額度耗盡自動備援)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
@@ -96,32 +95,44 @@ def generate_podcast_script(news_summary):
     print("🔍 查詢可用模型...")
     available_models = []
     try:
-        # 加入 timeout 避免查詢卡死
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name.replace('models/', ''))
     except Exception as e:
         print(f"查詢失敗: {e}")
 
-    preferred = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-pro']
-    selected = next((m for m in preferred if m in available_models), available_models[0])
-    print(f"🚀 使用模型: {selected}")
+    preferred = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.5-flash', 'gemini-pro']
     
-    try:
-        model = genai.GenerativeModel(selected)
-        # 設定 request_options 加上 60 秒 timeout
-        response = model.generate_content(prompt, request_options={"timeout": 60})
-        
-        content = response.text.strip()
-        triple_backticks = chr(96) * 3 
-        content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
+    # 建立一個依照偏好排序的模型嘗試清單
+    models_to_try = [m for m in preferred if m in available_models]
+    if not models_to_try and available_models:
+        models_to_try = [available_models[0]]
+
+    print(f"📋 準備嘗試的模型順序: {models_to_try}")
+
+    # 真實的容錯備援迴圈：如果遇到 429 額度爆滿，自動換下一個模型！
+    for model_name in models_to_try:
+        print(f"🚀 正在嘗試使用模型: {model_name}...")
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt, request_options={"timeout": 60})
             
-        return json.loads(content)
-    except Exception as e:
-        raise Exception(f"生成劇本失敗: {e}")
+            content = response.text.strip()
+            triple_backticks = chr(96) * 3 
+            content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
+                
+            return json.loads(content)
+            
+        except Exception as e:
+            # 捕捉到錯誤 (包含 429)，印出警告並繼續迴圈
+            print(f"⚠️ 模型 {model_name} 執行失敗 ({e})，正在自動切換下一個模型...")
+            continue
+            
+    # 如果迴圈跑完所有的模型都失敗，才拋出最終錯誤
+    raise Exception("❌ 所有設定的 Gemini 模型皆因為額度耗盡或網路問題生成失敗。請稍後再試！")
 
 # ==========================================
-# 4. 核心功能：語音生成與拼接 (加入 Asyncio Timeout)
+# 4. 核心功能：語音生成與拼接
 # ==========================================
 async def generate_audio(script, output_file):
     print("🎙️ 正在生成語音並進行無縫拼接...")
@@ -138,7 +149,6 @@ async def generate_audio(script, output_file):
             
         try:
             communicate = edge_tts.Communicate(text, voice)
-            # 強制 60 秒內必須產出這段語音，否則跳過，防止 Edge TTS 伺服器無回應卡死
             await asyncio.wait_for(communicate.save(temp_name), timeout=60.0)
             
             if os.path.exists(temp_name) and os.path.getsize(temp_name) > 0:
@@ -148,12 +158,12 @@ async def generate_audio(script, output_file):
                 
                 final_audio += segment + pause
             else:
-                print(f"⚠️ 警告: 段落 {i} 無法產生有效語音，已自動跳過 (文字內容: {text})")
+                print(f"⚠️ 警告: 段落 {i} 無效，已跳過 (內容: {text})")
                 
         except asyncio.TimeoutError:
-            print(f"⚠️ 警告: TTS 語音生成超時，已跳過段落 {i}")
+            print(f"⚠️ 警告: TTS 超時，跳過段落 {i}")
         except Exception as e:
-            print(f"⚠️ 警告: 處理段落 {i} 時發生錯誤，已自動跳過: {e}")
+            print(f"⚠️ 警告: 處理段落 {i} 發生錯誤，已跳過: {e}")
         finally:
             if os.path.exists(temp_name):
                 os.path.remove(temp_name)
@@ -162,10 +172,10 @@ async def generate_audio(script, output_file):
         final_audio.export(output_file, format="mp3", bitrate="128k")
         return output_file
     else:
-        raise Exception("所有語音段落皆生成失敗，無法產出 MP3。")
+        raise Exception("語音段落皆生成失敗，無法產出 MP3。")
 
 # ==========================================
-# 5. API 實作：Google Drive 上傳 (加入 30 秒 Timeout)
+# 5. API 實作：Google Drive 上傳
 # ==========================================
 def upload_to_gdrive(file_path):
     print("📡 正在上傳至 Google Drive...")
@@ -200,7 +210,7 @@ def upload_to_gdrive(file_path):
     return f"https://docs.google.com/uc?export=download&id={file_id}"
 
 # ==========================================
-# 6. API 實作：LINE 廣播群發 (加入 15 秒 Timeout)
+# 6. API 實作：LINE 廣播群發
 # ==========================================
 def send_line_podcast_broadcast(audio_url):
     print("💬 正在向所有好友發送 LINE 群發訊息...")
