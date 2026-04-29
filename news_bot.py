@@ -29,14 +29,15 @@ VOICES = {
 }
 
 # ==========================================
-# 2. 自動抓取 Google 即時新聞 (精準分類版)
+# 2. 自動抓取 Google 即時新聞 (加入 15 秒 Timeout)
 # ==========================================
 def fetch_real_time_news():
     print("📰 正在為「晨間廣播節目表」抓取各分類即時資訊...")
     
     def get_news_from_rss(url, limit=2):
         try:
-            res = requests.get(url)
+            # 加上 timeout=15，避免卡死
+            res = requests.get(url, timeout=15)
             res.raise_for_status()
             root = ET.fromstring(res.content)
             items = root.findall('.//item')
@@ -48,7 +49,6 @@ def fetch_real_time_news():
         except Exception as e:
             return f"無法抓取此分類: {e}"
 
-    # 針對六大單元設計的 RSS 來源
     weather_url = "https://news.google.com/rss/search?q=%E5%8F%B0%E7%81%A3+%E5%A4%A9%E6%B0%A3+%E6%BA%AB%E5%BA%A6&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     world_url = "https://news.google.com/rss/headlines/section/topic/WORLD?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     finance_url = "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
@@ -66,7 +66,7 @@ def fetch_real_time_news():
     return final_content
 
 # ==========================================
-# 3. 核心功能：雙人劇本生成 (六大單元導演版)
+# 3. 核心功能：雙人劇本生成 (加入 API Timeout)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
@@ -84,7 +84,7 @@ def generate_podcast_script(news_summary):
     【對話要求】
     1. 絕對口語化：多用「沒錯」、「對呀」、「你知道嗎」、「哇塞」、「說到這個」。
     2. 反應式對話：一人講完重要資訊，另一人要給予簡短的情緒反應，不要像機器人念稿。
-    3. 順暢過渡：單元之間切換要自然（例如：「聊完嚴肅的國際新聞，我們來看看輕鬆的娛樂圈...」）。
+    3. 順暢過渡：單元之間切換要自然。
     4. 避免純符號：台詞中盡量避免只出現表情符號，一定要有文字，以免語音生成失敗。
     
     輸出格式：純 JSON 陣列，不要有任何 Markdown 標記或說明文字。
@@ -96,6 +96,7 @@ def generate_podcast_script(news_summary):
     print("🔍 查詢可用模型...")
     available_models = []
     try:
+        # 加入 timeout 避免查詢卡死
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name.replace('models/', ''))
@@ -108,7 +109,8 @@ def generate_podcast_script(news_summary):
     
     try:
         model = genai.GenerativeModel(selected)
-        response = model.generate_content(prompt)
+        # 設定 request_options 加上 60 秒 timeout
+        response = model.generate_content(prompt, request_options={"timeout": 60})
         
         content = response.text.strip()
         triple_backticks = chr(96) * 3 
@@ -119,7 +121,7 @@ def generate_podcast_script(news_summary):
         raise Exception(f"生成劇本失敗: {e}")
 
 # ==========================================
-# 4. 核心功能：語音生成與拼接 (增強防錯機制)
+# 4. 核心功能：語音生成與拼接 (加入 Asyncio Timeout)
 # ==========================================
 async def generate_audio(script, output_file):
     print("🎙️ 正在生成語音並進行無縫拼接...")
@@ -131,16 +133,14 @@ async def generate_audio(script, output_file):
         voice = VOICES.get(speaker, VOICES["HostA"])
         temp_name = f"segment_{i}.mp3"
         
-        # 1. 如果台詞是空的，直接跳過，避免報錯
         if not text:
             continue
             
         try:
-            # 產生單句語音
             communicate = edge_tts.Communicate(text, voice)
-            await communicate.save(temp_name)
+            # 強制 60 秒內必須產出這段語音，否則跳過，防止 Edge TTS 伺服器無回應卡死
+            await asyncio.wait_for(communicate.save(temp_name), timeout=60.0)
             
-            # 2. 檢查檔案是否真的存在且大於 0 byte (過濾掉純 Emoji 或無效字元的狀況)
             if os.path.exists(temp_name) and os.path.getsize(temp_name) > 0:
                 segment = AudioSegment.from_mp3(temp_name)
                 pause_duration = 300 if speaker == "HostB" else 450
@@ -150,14 +150,14 @@ async def generate_audio(script, output_file):
             else:
                 print(f"⚠️ 警告: 段落 {i} 無法產生有效語音，已自動跳過 (文字內容: {text})")
                 
+        except asyncio.TimeoutError:
+            print(f"⚠️ 警告: TTS 語音生成超時，已跳過段落 {i}")
         except Exception as e:
             print(f"⚠️ 警告: 處理段落 {i} 時發生錯誤，已自動跳過: {e}")
         finally:
-            # 確保暫存檔一定會被清理，保持環境乾淨
             if os.path.exists(temp_name):
                 os.path.remove(temp_name)
     
-    # 確保最終有成功合併的音檔才匯出
     if len(final_audio) > 0:
         final_audio.export(output_file, format="mp3", bitrate="128k")
         return output_file
@@ -165,7 +165,7 @@ async def generate_audio(script, output_file):
         raise Exception("所有語音段落皆生成失敗，無法產出 MP3。")
 
 # ==========================================
-# 5. API 實作：Google Drive 上傳
+# 5. API 實作：Google Drive 上傳 (加入 30 秒 Timeout)
 # ==========================================
 def upload_to_gdrive(file_path):
     print("📡 正在上傳至 Google Drive...")
@@ -176,7 +176,7 @@ def upload_to_gdrive(file_path):
         "refresh_token": GDRIVE_REFRESH_TOKEN,
         "grant_type": "refresh_token",
     }
-    r = requests.post(token_url, data=token_data)
+    r = requests.post(token_url, data=token_data, timeout=30)
     r.raise_for_status()
     access_token = r.json().get("access_token")
 
@@ -190,17 +190,17 @@ def upload_to_gdrive(file_path):
     }
     upload_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
     headers = {"Authorization": f"Bearer {access_token}"}
-    res = requests.post(upload_url, headers=headers, files=files)
+    res = requests.post(upload_url, headers=headers, files=files, timeout=60)
     res.raise_for_status()
     file_id = res.json().get("id")
 
     perm_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions"
-    requests.post(perm_url, headers=headers, json={"role": "reader", "type": "anyone"})
+    requests.post(perm_url, headers=headers, json={"role": "reader", "type": "anyone"}, timeout=30)
     
     return f"https://docs.google.com/uc?export=download&id={file_id}"
 
 # ==========================================
-# 6. API 實作：LINE 廣播群發
+# 6. API 實作：LINE 廣播群發 (加入 15 秒 Timeout)
 # ==========================================
 def send_line_podcast_broadcast(audio_url):
     print("💬 正在向所有好友發送 LINE 群發訊息...")
@@ -239,7 +239,7 @@ def send_line_podcast_broadcast(audio_url):
     }
     
     line_url = "https://api.line.me/v2/bot/message/broadcast"
-    res = requests.post(line_url, headers=headers, json=payload)
+    res = requests.post(line_url, headers=headers, json=payload, timeout=15)
     res.raise_for_status()
     print("✅ 群發廣播成功！")
 
@@ -250,16 +250,13 @@ def main():
     try:
         print("🚀 開始執行【晨間 AI 廣播節目】任務...")
         
-        # 抓取包含氣象、財經、娛樂等專屬板塊的新聞
         news_content = fetch_real_time_news()
-        
         script = generate_podcast_script(news_content)
         
         output_file = "morning_radio_podcast.mp3"
         asyncio.run(generate_audio(script, output_file))
         
         audio_link = upload_to_gdrive(output_file)
-        
         send_line_podcast_broadcast(audio_link)
         
         print("🎉 節目製作與推播已完美達成！")
