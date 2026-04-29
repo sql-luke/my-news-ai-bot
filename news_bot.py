@@ -137,8 +137,8 @@ def main():
         final_mp3 = merge_audio_files(temp_files, "daily_news_podcast.mp3")
         
         # 5. 上傳與推播
-        # file_link = upload_to_gdrive(final_mp3)
-        # send_line_flex_message(file_link)
+        file_link = upload_to_gdrive(final_mp3)
+        send_line_flex_message(file_link)
         
         print("任務全數完成！")
         
