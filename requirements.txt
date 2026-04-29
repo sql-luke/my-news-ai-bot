@@ -4,3 +4,6 @@ edge-tts
 mutagen
 google-api-python-client
 google-auth-oauthlib
+google-generativeai
+edge-tts
+pydub
