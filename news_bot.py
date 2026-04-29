@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import requests
+import time  # 新增 time 模組用來讓程式暫停
 import xml.etree.ElementTree as ET
 import edge_tts
 from pydub import AudioSegment
@@ -65,7 +66,7 @@ def fetch_real_time_news():
     return final_content
 
 # ==========================================
-# 3. 核心功能：雙人劇本生成 (升級版：額度耗盡自動備援)
+# 3. 核心功能：雙人劇本生成 (智慧等待版)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
@@ -101,35 +102,41 @@ def generate_podcast_script(news_summary):
     except Exception as e:
         print(f"查詢失敗: {e}")
 
+    # 把 1.5-flash 放第一個，因為它的免費額度給得最大方，最不容易爆
     preferred = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.5-flash', 'gemini-pro']
-    
-    # 建立一個依照偏好排序的模型嘗試清單
     models_to_try = [m for m in preferred if m in available_models]
     if not models_to_try and available_models:
         models_to_try = [available_models[0]]
 
     print(f"📋 準備嘗試的模型順序: {models_to_try}")
 
-    # 真實的容錯備援迴圈：如果遇到 429 額度爆滿，自動換下一個模型！
-    for model_name in models_to_try:
-        print(f"🚀 正在嘗試使用模型: {model_name}...")
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt, request_options={"timeout": 60})
-            
-            content = response.text.strip()
-            triple_backticks = chr(96) * 3 
-            content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
+    # 最多允許重試 3 輪
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        for model_name in models_to_try:
+            print(f"🚀 正在嘗試使用模型: {model_name} (第 {attempt + 1} 輪嘗試)...")
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt, request_options={"timeout": 60})
                 
-            return json.loads(content)
-            
-        except Exception as e:
-            # 捕捉到錯誤 (包含 429)，印出警告並繼續迴圈
-            print(f"⚠️ 模型 {model_name} 執行失敗 ({e})，正在自動切換下一個模型...")
-            continue
-            
-    # 如果迴圈跑完所有的模型都失敗，才拋出最終錯誤
-    raise Exception("❌ 所有設定的 Gemini 模型皆因為額度耗盡或網路問題生成失敗。請稍後再試！")
+                content = response.text.strip()
+                triple_backticks = chr(96) * 3 
+                content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
+                    
+                return json.loads(content)
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"⚠️ 模型 {model_name} 執行失敗: {error_msg}")
+                
+                # 關鍵防護：如果偵測到 API 限制 (429) 或要求 retry_delay，強制休息 45 秒
+                if "429" in error_msg or "retry_delay" in error_msg or "Quota" in error_msg:
+                    print("⏳ 偵測到免費額度限制！讓程式深呼吸，暫停 45 秒後再出發...")
+                    time.sleep(45)
+                continue
+                
+    raise Exception("❌ 已經過多次嘗試與等待，所有 Gemini 模型皆無法成功生成劇本。請檢查您的額度狀態。")
 
 # ==========================================
 # 4. 核心功能：語音生成與拼接
