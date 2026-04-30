@@ -25,8 +25,8 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 VOICES = {
-    "HostA": "zh-TW-HsiaoChenNeural", # 女聲
-    "HostB": "zh-TW-YunJheNeural"     # 男聲
+    "HostA": "zh-TW-HsiaoChenNeural", # 女聲 (主導播報)
+    "HostB": "zh-TW-YunJheNeural"     # 男聲 (搭檔互動)
 }
 
 # ==========================================
@@ -62,10 +62,11 @@ def fetch_real_time_news():
     🔬【科技酷報】：\n{get_news_from_rss(tech_url, 2)}
     🍿【生活娛樂】：\n{get_news_from_rss(ent_url, 2)}
     """
+    print("✅ 節目素材抓取完成！")
     return final_content
 
 # ==========================================
-# 3. 核心功能：雙人劇本生成 (JSON 防呆+防卡死版)
+# 3. 核心功能：雙人劇本生成 (Gemini 1.5 Pro 頂級版)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
@@ -81,7 +82,7 @@ def generate_podcast_script(news_summary):
     6. 📖 每日一句：送上一句激勵人心的名言。
     
     【對話要求】
-    1. 絕對口語化：多用「沒錯」、「對呀」、「你知道嗎」。
+    1. 絕對口語化：多用「沒錯」、「對呀」、「你知道嗎」、「哇塞」。
     2. 反應式對話：一人講完重要資訊，另一人要給予簡短的情緒反應。
     3. 避免純符號：台詞中一定要有文字，不能只有表情符號。
     
@@ -92,57 +93,40 @@ def generate_podcast_script(news_summary):
     {news_summary}
     """
     
-    print("🔍 查詢可用模型...")
-    available_models = []
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name.replace('models/', ''))
-    except Exception as e:
-        print(f"查詢失敗: {e}")
-
-    preferred = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.5-flash', 'gemini-pro']
-    models_to_try = [m for m in preferred if m in available_models]
-    if not models_to_try and available_models:
-        models_to_try = [available_models[0]]
-
-    print(f"📋 準備嘗試的模型順序: {models_to_try}")
-
+    print("🚀 準備呼叫頂級模型：gemini-1.5-pro...")
+    
     for attempt in range(3):
-        for model_name in models_to_try:
-            print(f"🚀 正在嘗試使用模型: {model_name} (第 {attempt + 1} 輪嘗試)...")
-            try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt, request_options={"timeout": 60})
-                
-                content = response.text.strip()
-                triple_backticks = chr(96) * 3 
-                content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
-                
-                script_data = json.loads(content)
-                
-                if isinstance(script_data, dict):
-                    print("⚠️ 偵測到劇本被包裝在字典中，正在自動解開...")
-                    for key, value in script_data.items():
-                        if isinstance(value, list):
-                            script_data = value
-                            break
-                            
-                if isinstance(script_data, list) and len(script_data) > 0:
-                    print(f"✅ 成功解析劇本！共產生 {len(script_data)} 句對話。")
-                    return script_data
-                else:
-                    raise Exception("解析後的劇本為空或格式錯誤。")
-                
-            except Exception as e:
-                error_msg = str(e)
-                print(f"⚠️ 模型 {model_name} 執行失敗: {error_msg}")
-                if "429" in error_msg or "retry_delay" in error_msg or "Quota" in error_msg:
-                    print("⏳ 偵測到免費額度限制！暫停 45 秒後再出發...")
-                    time.sleep(45)
-                continue
-                
-    raise Exception("❌ 所有模型皆無法成功生成劇本。")
+        try:
+            model = genai.GenerativeModel('gemini-1.5-pro')
+            response = model.generate_content(prompt, request_options={"timeout": 60})
+            
+            content = response.text.strip()
+            triple_backticks = chr(96) * 3 
+            content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
+            
+            script_data = json.loads(content)
+            
+            if isinstance(script_data, dict):
+                print("⚠️ 偵測到劇本被包裝在字典中，正在自動解開...")
+                for key, value in script_data.items():
+                    if isinstance(value, list):
+                        script_data = value
+                        break
+                        
+            if isinstance(script_data, list) and len(script_data) > 0:
+                print(f"✅ 成功使用 1.5-pro 解析劇本！共產生 {len(script_data)} 句對話。")
+                return script_data
+            else:
+                raise Exception("解析後的劇本為空或格式錯誤。")
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"⚠️ 執行失敗 (第 {attempt + 1} 輪): {error_msg}")
+            print("⏳ 稍微暫停 10 秒後重試...")
+            time.sleep(10)
+            continue
+            
+    raise Exception("❌ 多次嘗試皆無法成功生成劇本，請檢查 API 狀態。")
 
 # ==========================================
 # 4. 核心功能：語音生成與 BGM 混音
