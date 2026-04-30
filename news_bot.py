@@ -65,7 +65,7 @@ def fetch_real_time_news():
     return final_content
 
 # ==========================================
-# 3. 核心功能：雙人劇本生成 
+# 3. 核心功能：雙人劇本生成 (JSON 防呆+防卡死版)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
@@ -145,7 +145,7 @@ def generate_podcast_script(news_summary):
     raise Exception("❌ 所有模型皆無法成功生成劇本。")
 
 # ==========================================
-# 4. 核心功能：語音生成與拼接
+# 4. 核心功能：語音生成與 BGM 混音
 # ==========================================
 async def generate_audio(script, output_file):
     print(f"🎙️ 準備開始錄製 {len(script)} 句對話...")
@@ -153,18 +153,14 @@ async def generate_audio(script, output_file):
     success_count = 0
     
     for i, line in enumerate(script):
-        if not isinstance(line, dict):
-            print(f"⚠️ 警告: 第 {i} 句格式錯誤，已跳過 (內容: {line})")
-            continue
+        if not isinstance(line, dict): continue
             
         text = line.get('text', '').strip()
         speaker = line.get('speaker', 'HostA')
         voice = VOICES.get(speaker, VOICES["HostA"])
         temp_name = f"segment_{i}.mp3"
         
-        if not text:
-            print(f"⚠️ 警告: 第 {i} 句沒有台詞，已跳過。")
-            continue
+        if not text: continue
             
         try:
             print(f"  🗣️ 錄製中 [{speaker}]: {text[:20]}...")
@@ -178,24 +174,40 @@ async def generate_audio(script, output_file):
                 
                 final_audio += segment + pause
                 success_count += 1
-            else:
-                print(f"  ❌ 失敗: 產生的音檔無效。")
-                
-        except asyncio.TimeoutError:
-            print(f"  ❌ 失敗: TTS 伺服器連線超時。")
         except Exception as e:
-            print(f"  ❌ 失敗: 發生未知錯誤 -> {e}")
+            print(f"  ❌ 失敗: {e}")
         finally:
-            # 👉 這裡已經修正為正確的 os.remove() 👈
             if os.path.exists(temp_name):
                 os.remove(temp_name)
     
     if len(final_audio) > 0 and success_count > 0:
         print(f"✅ 錄製完畢！成功縫合 {success_count} 句對話。")
+        
+        # --- BGM 混音處理區塊 ---
+        bgm_file = "bgm.mp3"
+        if os.path.exists(bgm_file):
+            print("🎵 找到 bgm.mp3，正在進行背景音樂混音處理...")
+            try:
+                bgm = AudioSegment.from_mp3(bgm_file)
+                # 降低背景音量 (-22 分貝)，確保不會蓋過人聲
+                bgm = bgm - 22
+                # 將 BGM 延長循環，直到能覆蓋整段人聲長度
+                bgm_looped = bgm * (len(final_audio) // len(bgm) + 1)
+                # 裁切至與人聲剛好等長
+                bgm_looped = bgm_looped[:len(final_audio)]
+                # 將人聲與背景音疊加
+                final_audio = final_audio.overlay(bgm_looped)
+                print("✅ 混音完美達成！")
+            except Exception as e:
+                print(f"⚠️ 背景音樂混音失敗，將輸出純人聲版本: {e}")
+        else:
+            print("⚠️ 未偵測到 bgm.mp3，將直接輸出純人聲版本。")
+        # ------------------------
+
         final_audio.export(output_file, format="mp3", bitrate="128k")
         return output_file
     else:
-        raise Exception(f"所有語音段落皆生成失敗 (成功數: {success_count} / 總句數: {len(script)})，無法產出 MP3。")
+        raise Exception("所有語音段落皆生成失敗，無法產出 MP3。")
 
 # ==========================================
 # 5. API 實作：Google Drive 上傳
