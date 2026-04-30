@@ -65,7 +65,7 @@ def fetch_real_time_news():
     return final_content
 
 # ==========================================
-# 3. 核心功能：雙人劇本生成 (JSON 防呆升級版)
+# 3. 核心功能：雙人劇本生成 
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
@@ -119,10 +119,8 @@ def generate_podcast_script(news_summary):
                 triple_backticks = chr(96) * 3 
                 content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
                 
-                # 解析 JSON
                 script_data = json.loads(content)
                 
-                # 【防呆機制】：如果 Gemini 不聽話，把陣列包在字典裡，我們自動把它拆出來
                 if isinstance(script_data, dict):
                     print("⚠️ 偵測到劇本被包裝在字典中，正在自動解開...")
                     for key, value in script_data.items():
@@ -130,7 +128,6 @@ def generate_podcast_script(news_summary):
                             script_data = value
                             break
                             
-                # 確保最終拿到的是一個列表，且裡面有東西
                 if isinstance(script_data, list) and len(script_data) > 0:
                     print(f"✅ 成功解析劇本！共產生 {len(script_data)} 句對話。")
                     return script_data
@@ -148,7 +145,7 @@ def generate_podcast_script(news_summary):
     raise Exception("❌ 所有模型皆無法成功生成劇本。")
 
 # ==========================================
-# 4. 核心功能：語音生成與拼接 (詳細除錯版)
+# 4. 核心功能：語音生成與拼接
 # ==========================================
 async def generate_audio(script, output_file):
     print(f"🎙️ 準備開始錄製 {len(script)} 句對話...")
@@ -156,7 +153,6 @@ async def generate_audio(script, output_file):
     success_count = 0
     
     for i, line in enumerate(script):
-        # 增加型別檢查，避免 line 不是 dict 導致報錯
         if not isinstance(line, dict):
             print(f"⚠️ 警告: 第 {i} 句格式錯誤，已跳過 (內容: {line})")
             continue
@@ -190,15 +186,16 @@ async def generate_audio(script, output_file):
         except Exception as e:
             print(f"  ❌ 失敗: 發生未知錯誤 -> {e}")
         finally:
+            # 👉 這裡已經修正為正確的 os.remove() 👈
             if os.path.exists(temp_name):
-                os.path.remove(temp_name)
+                os.remove(temp_name)
     
     if len(final_audio) > 0 and success_count > 0:
         print(f"✅ 錄製完畢！成功縫合 {success_count} 句對話。")
         final_audio.export(output_file, format="mp3", bitrate="128k")
         return output_file
     else:
-        raise Exception(f"所有語音段落皆生成失敗 (成功數: {success_count} / 總句數: {len(script)})，無法產出 MP3。請檢查 GitHub 日誌中的具體 ❌ 失敗原因。")
+        raise Exception(f"所有語音段落皆生成失敗 (成功數: {success_count} / 總句數: {len(script)})，無法產出 MP3。")
 
 # ==========================================
 # 5. API 實作：Google Drive 上傳
