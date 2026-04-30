@@ -66,7 +66,7 @@ def fetch_real_time_news():
     return final_content
 
 # ==========================================
-# 3. 核心功能：雙人劇本生成 (Gemini 1.5 Pro 頂級版)
+# 3. 核心功能：雙人劇本生成 (自動搜尋頂級 Pro 模型版)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
@@ -93,38 +93,61 @@ def generate_podcast_script(news_summary):
     {news_summary}
     """
     
-    print("🚀 準備呼叫頂級模型：gemini-1.5-pro...")
+    print("🔍 正在掃描您帳號可用的最高級模型...")
+    available_models = []
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name.replace('models/', ''))
+    except Exception as e:
+        print(f"查詢失敗: {e}")
+
+    # 自動篩選出名字裡包含 'pro' 的模型（例如 gemini-1.5-pro-latest, gemini-2.5-pro 等）
+    pro_models = [m for m in available_models if 'pro' in m.lower()]
+    # 把 flash 當作備用底線
+    flash_models = [m for m in available_models if 'flash' in m.lower()]
     
+    # 組合嘗試清單：優先嘗試各種 Pro，再嘗試 Flash
+    models_to_try = pro_models + flash_models
+    if not models_to_try and available_models:
+        models_to_try = available_models
+
+    print(f"📋 鎖定目標，準備嘗試的模型順序: {models_to_try}")
+
     for attempt in range(3):
-        try:
-            model = genai.GenerativeModel('gemini-1.5-pro')
-            response = model.generate_content(prompt, request_options={"timeout": 60})
-            
-            content = response.text.strip()
-            triple_backticks = chr(96) * 3 
-            content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
-            
-            script_data = json.loads(content)
-            
-            if isinstance(script_data, dict):
-                print("⚠️ 偵測到劇本被包裝在字典中，正在自動解開...")
-                for key, value in script_data.items():
-                    if isinstance(value, list):
-                        script_data = value
-                        break
-                        
-            if isinstance(script_data, list) and len(script_data) > 0:
-                print(f"✅ 成功使用 1.5-pro 解析劇本！共產生 {len(script_data)} 句對話。")
-                return script_data
-            else:
-                raise Exception("解析後的劇本為空或格式錯誤。")
-            
-        except Exception as e:
-            error_msg = str(e)
-            print(f"⚠️ 執行失敗 (第 {attempt + 1} 輪): {error_msg}")
-            print("⏳ 稍微暫停 10 秒後重試...")
-            time.sleep(10)
-            continue
+        for model_name in models_to_try:
+            print(f"🚀 正在呼叫模型: {model_name} (第 {attempt + 1} 輪嘗試)...")
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt, request_options={"timeout": 60})
+                
+                content = response.text.strip()
+                triple_backticks = chr(96) * 3 
+                content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
+                
+                script_data = json.loads(content)
+                
+                if isinstance(script_data, dict):
+                    print("⚠️ 偵測到劇本被包裝在字典中，正在自動解開...")
+                    for key, value in script_data.items():
+                        if isinstance(value, list):
+                            script_data = value
+                            break
+                            
+                if isinstance(script_data, list) and len(script_data) > 0:
+                    print(f"✅ 成功使用 {model_name} 解析劇本！共產生 {len(script_data)} 句對話。")
+                    return script_data
+                else:
+                    raise Exception("解析後的劇本為空或格式錯誤。")
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"⚠️ 執行失敗: {error_msg}")
+                # 遇到錯誤就換清單裡下一個模型試試看
+                continue
+                
+        print("⏳ 一輪掃描完畢皆失敗，稍微暫停 10 秒後進行下一輪重試...")
+        time.sleep(10)
             
     raise Exception("❌ 多次嘗試皆無法成功生成劇本，請檢查 API 狀態。")
 
@@ -173,13 +196,9 @@ async def generate_audio(script, output_file):
             print("🎵 找到 bgm.mp3，正在進行背景音樂混音處理...")
             try:
                 bgm = AudioSegment.from_mp3(bgm_file)
-                # 降低背景音量 (-22 分貝)，確保不會蓋過人聲
                 bgm = bgm - 22
-                # 將 BGM 延長循環，直到能覆蓋整段人聲長度
                 bgm_looped = bgm * (len(final_audio) // len(bgm) + 1)
-                # 裁切至與人聲剛好等長
                 bgm_looped = bgm_looped[:len(final_audio)]
-                # 將人聲與背景音疊加
                 final_audio = final_audio.overlay(bgm_looped)
                 print("✅ 混音完美達成！")
             except Exception as e:
