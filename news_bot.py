@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 import requests
-import time  # 新增 time 模組用來讓程式暫停
+import time
 import xml.etree.ElementTree as ET
 import edge_tts
 from pydub import AudioSegment
@@ -25,8 +25,8 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 VOICES = {
-    "HostA": "zh-TW-HsiaoChenNeural", # 女聲 (主導播報)
-    "HostB": "zh-TW-YunJheNeural"     # 男聲 (搭檔互動)
+    "HostA": "zh-TW-HsiaoChenNeural", # 女聲
+    "HostB": "zh-TW-YunJheNeural"     # 男聲
 }
 
 # ==========================================
@@ -62,32 +62,31 @@ def fetch_real_time_news():
     🔬【科技酷報】：\n{get_news_from_rss(tech_url, 2)}
     🍿【生活娛樂】：\n{get_news_from_rss(ent_url, 2)}
     """
-    print("✅ 節目素材抓取完成！內容如下：\n", final_content)
     return final_content
 
 # ==========================================
-# 3. 核心功能：雙人劇本生成 (智慧等待版)
+# 3. 核心功能：雙人劇本生成 (JSON 防呆升級版)
 # ==========================================
 def generate_podcast_script(news_summary):
     prompt = f"""
     你現在是頂級的 AI 晨間廣播節目製作人，風格模仿 NotebookLM，自然、生動、幽默。
     請根據以下「即時新聞內容」，寫一段 HostA (女) 與 HostB (男) 的晨間廣播劇本。
     
-    【廣播節目表流程】(請務必嚴格按照此順序播報，並自然過渡)：
-    1. 🌤️ 早安氣象站：HostA 開場問好，並根據氣象情報給出「今日穿搭與出門建議」。
+    【廣播節目表流程】
+    1. 🌤️ 早安氣象站：HostA 開場問好，並給出出門建議。
     2. 🌍 國際頭條雷達：兩人聊聊世界發生的大事。
-    3. 💰 財經與市場：帶出股市脈動或理財趨勢（HostB 可以發表一些小觀點）。
+    3. 💰 財經與市場：帶出股市脈動或理財趨勢。
     4. 🔬 科技酷報：分享 AI 新知或 3C 產品消息。
-    5. 🍿 生活與娛樂：輕鬆一下，聊聊影劇、生活或流行文化。
-    6. 📖 每日一句：節目尾聲，由其中一人送上一句激勵人心的名言（中英皆可），完美收尾。
+    5. 🍿 生活與娛樂：聊聊影劇或流行文化。
+    6. 📖 每日一句：送上一句激勵人心的名言。
     
     【對話要求】
-    1. 絕對口語化：多用「沒錯」、「對呀」、「你知道嗎」、「哇塞」、「說到這個」。
-    2. 反應式對話：一人講完重要資訊，另一人要給予簡短的情緒反應，不要像機器人念稿。
-    3. 順暢過渡：單元之間切換要自然。
-    4. 避免純符號：台詞中盡量避免只出現表情符號，一定要有文字，以免語音生成失敗。
+    1. 絕對口語化：多用「沒錯」、「對呀」、「你知道嗎」。
+    2. 反應式對話：一人講完重要資訊，另一人要給予簡短的情緒反應。
+    3. 避免純符號：台詞中一定要有文字，不能只有表情符號。
     
-    輸出格式：純 JSON 陣列，不要有任何 Markdown 標記或說明文字。
+    輸出格式：純 JSON 陣列 (List of objects)，絕對不要包在 dict 裡面，不要 Markdown 標記。
+    範例：[ {{"speaker": "HostA", "text": "大家好..."}}, {{"speaker": "HostB", "text": "早安..."}} ]
     
     今日節目素材：
     {news_summary}
@@ -102,7 +101,6 @@ def generate_podcast_script(news_summary):
     except Exception as e:
         print(f"查詢失敗: {e}")
 
-    # 把 1.5-flash 放第一個，因為它的免費額度給得最大方，最不容易爆
     preferred = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.5-flash', 'gemini-pro']
     models_to_try = [m for m in preferred if m in available_models]
     if not models_to_try and available_models:
@@ -110,10 +108,7 @@ def generate_podcast_script(news_summary):
 
     print(f"📋 準備嘗試的模型順序: {models_to_try}")
 
-    # 最多允許重試 3 輪
-    max_retries = 3
-    
-    for attempt in range(max_retries):
+    for attempt in range(3):
         for model_name in models_to_try:
             print(f"🚀 正在嘗試使用模型: {model_name} (第 {attempt + 1} 輪嘗試)...")
             try:
@@ -123,38 +118,60 @@ def generate_podcast_script(news_summary):
                 content = response.text.strip()
                 triple_backticks = chr(96) * 3 
                 content = content.replace(triple_backticks + "json", "").replace(triple_backticks, "").strip()
-                    
-                return json.loads(content)
+                
+                # 解析 JSON
+                script_data = json.loads(content)
+                
+                # 【防呆機制】：如果 Gemini 不聽話，把陣列包在字典裡，我們自動把它拆出來
+                if isinstance(script_data, dict):
+                    print("⚠️ 偵測到劇本被包裝在字典中，正在自動解開...")
+                    for key, value in script_data.items():
+                        if isinstance(value, list):
+                            script_data = value
+                            break
+                            
+                # 確保最終拿到的是一個列表，且裡面有東西
+                if isinstance(script_data, list) and len(script_data) > 0:
+                    print(f"✅ 成功解析劇本！共產生 {len(script_data)} 句對話。")
+                    return script_data
+                else:
+                    raise Exception("解析後的劇本為空或格式錯誤。")
                 
             except Exception as e:
                 error_msg = str(e)
                 print(f"⚠️ 模型 {model_name} 執行失敗: {error_msg}")
-                
-                # 關鍵防護：如果偵測到 API 限制 (429) 或要求 retry_delay，強制休息 45 秒
                 if "429" in error_msg or "retry_delay" in error_msg or "Quota" in error_msg:
-                    print("⏳ 偵測到免費額度限制！讓程式深呼吸，暫停 45 秒後再出發...")
+                    print("⏳ 偵測到免費額度限制！暫停 45 秒後再出發...")
                     time.sleep(45)
                 continue
                 
-    raise Exception("❌ 已經過多次嘗試與等待，所有 Gemini 模型皆無法成功生成劇本。請檢查您的額度狀態。")
+    raise Exception("❌ 所有模型皆無法成功生成劇本。")
 
 # ==========================================
-# 4. 核心功能：語音生成與拼接
+# 4. 核心功能：語音生成與拼接 (詳細除錯版)
 # ==========================================
 async def generate_audio(script, output_file):
-    print("🎙️ 正在生成語音並進行無縫拼接...")
+    print(f"🎙️ 準備開始錄製 {len(script)} 句對話...")
     final_audio = AudioSegment.empty()
+    success_count = 0
     
     for i, line in enumerate(script):
+        # 增加型別檢查，避免 line 不是 dict 導致報錯
+        if not isinstance(line, dict):
+            print(f"⚠️ 警告: 第 {i} 句格式錯誤，已跳過 (內容: {line})")
+            continue
+            
         text = line.get('text', '').strip()
         speaker = line.get('speaker', 'HostA')
         voice = VOICES.get(speaker, VOICES["HostA"])
         temp_name = f"segment_{i}.mp3"
         
         if not text:
+            print(f"⚠️ 警告: 第 {i} 句沒有台詞，已跳過。")
             continue
             
         try:
+            print(f"  🗣️ 錄製中 [{speaker}]: {text[:20]}...")
             communicate = edge_tts.Communicate(text, voice)
             await asyncio.wait_for(communicate.save(temp_name), timeout=60.0)
             
@@ -164,22 +181,24 @@ async def generate_audio(script, output_file):
                 pause = AudioSegment.silent(duration=pause_duration)
                 
                 final_audio += segment + pause
+                success_count += 1
             else:
-                print(f"⚠️ 警告: 段落 {i} 無效，已跳過 (內容: {text})")
+                print(f"  ❌ 失敗: 產生的音檔無效。")
                 
         except asyncio.TimeoutError:
-            print(f"⚠️ 警告: TTS 超時，跳過段落 {i}")
+            print(f"  ❌ 失敗: TTS 伺服器連線超時。")
         except Exception as e:
-            print(f"⚠️ 警告: 處理段落 {i} 發生錯誤，已跳過: {e}")
+            print(f"  ❌ 失敗: 發生未知錯誤 -> {e}")
         finally:
             if os.path.exists(temp_name):
                 os.path.remove(temp_name)
     
-    if len(final_audio) > 0:
+    if len(final_audio) > 0 and success_count > 0:
+        print(f"✅ 錄製完畢！成功縫合 {success_count} 句對話。")
         final_audio.export(output_file, format="mp3", bitrate="128k")
         return output_file
     else:
-        raise Exception("語音段落皆生成失敗，無法產出 MP3。")
+        raise Exception(f"所有語音段落皆生成失敗 (成功數: {success_count} / 總句數: {len(script)})，無法產出 MP3。請檢查 GitHub 日誌中的具體 ❌ 失敗原因。")
 
 # ==========================================
 # 5. API 實作：Google Drive 上傳
@@ -197,16 +216,11 @@ def upload_to_gdrive(file_path):
     r.raise_for_status()
     access_token = r.json().get("access_token")
 
-    metadata = {
-        "name": os.path.basename(file_path),
-        "parents": [GDRIVE_FOLDER_ID]
-    }
-    files = {
-        'data': ('metadata', json.dumps(metadata), 'application/json'),
-        'file': open(file_path, 'rb')
-    }
+    metadata = {"name": os.path.basename(file_path), "parents": [GDRIVE_FOLDER_ID]}
+    files = {'data': ('metadata', json.dumps(metadata), 'application/json'), 'file': open(file_path, 'rb')}
     upload_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
     headers = {"Authorization": f"Bearer {access_token}"}
+    
     res = requests.post(upload_url, headers=headers, files=files, timeout=60)
     res.raise_for_status()
     file_id = res.json().get("id")
@@ -240,11 +254,7 @@ def send_line_podcast_broadcast(audio_url):
                         {"type": "text", "text": "氣象/國際/財經/科技/娛樂/金句", "size": "xs", "color": "#aaaaaa", "margin": "sm"},
                         {
                             "type": "button",
-                            "action": {
-                                "type": "uri",
-                                "label": "▶️ 點擊收聽節目",
-                                "uri": audio_url
-                            },
+                            "action": {"type": "uri", "label": "▶️ 點擊收聽節目", "uri": audio_url},
                             "style": "primary",
                             "color": "#1DB446",
                             "margin": "xl"
@@ -255,8 +265,7 @@ def send_line_podcast_broadcast(audio_url):
         }]
     }
     
-    line_url = "https://api.line.me/v2/bot/message/broadcast"
-    res = requests.post(line_url, headers=headers, json=payload, timeout=15)
+    res = requests.post("https://api.line.me/v2/bot/message/broadcast", headers=headers, json=payload, timeout=15)
     res.raise_for_status()
     print("✅ 群發廣播成功！")
 
@@ -266,7 +275,6 @@ def send_line_podcast_broadcast(audio_url):
 def main():
     try:
         print("🚀 開始執行【晨間 AI 廣播節目】任務...")
-        
         news_content = fetch_real_time_news()
         script = generate_podcast_script(news_content)
         
